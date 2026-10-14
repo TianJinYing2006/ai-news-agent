@@ -51,7 +51,7 @@ class Config:
     smtp: SMTPConfig
 
     @classmethod
-    def load(cls, env_file: Path | None = None) -> "Config":
+    def load(cls, env_file: Path | None = None) -> Config:
         load_dotenv(env_file or PROJECT_ROOT / ".env")
 
         return cls(
