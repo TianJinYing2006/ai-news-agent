@@ -1,5 +1,7 @@
 # ai-news-agent
 
+[![CI](https://github.com/TianJinYing2006/ai-news-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/TianJinYing2006/ai-news-agent/actions/workflows/ci.yml)
+
 每日 AI 新闻简报 Agent：每天自动整理一份 AI 新闻简报并推送到邮箱。
 
 核心设计点是**工具调用顺序完全由大模型决定**——不是"先抓完 RSS，再筛选，再总结"的固定流水线，
