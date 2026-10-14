@@ -14,7 +14,7 @@
 - 手写 ReAct 循环。保留需求指定的五个工具，并加入 RSS、网页搜索、正文抓取和结束工具。网络工具给模型能力，不规定它必须按固定顺序调用。
 - 邮件作为推送渠道。邮件发送由 pipeline 在简报通过校验后执行，模型不能自行发送。
 - trace 保存在 SQLite，供排障和验证循环行为；MVP 不接 Langfuse/OTel，不做独立运行轨迹页面。
-- 调度采用进程内 APScheduler（随 FastAPI 启动，每日 07:00 `Asia/Shanghai`，时间经 `DAILY_RUN_AT` 配置）：单进程单 worker、任务不重叠（`max_instances=1`、`MemoryJobStore` 不引入持久化任务库）；不引入第二调度器（含系统任务计划程序）。服务未运行期间错过的任务不自动补跑。
+- 调度采用进程内 APScheduler（随 FastAPI 启动）：推送时间默认取 `.env` `DAILY_RUN_AT`，网页可改（存 SQLite `settings`，优先于环境默认值，保存即重排）；历史页提供「立即运行一次」按钮（后台一次性任务，走同一 `run_daily` 与防重）。单进程单 worker、任务不重叠（`max_instances=1`、`MemoryJobStore` 不引入持久化任务库）；不引入第二调度器（含系统任务计划程序）。服务启动时补跑当天（已过推送时间且未发送则立即运行一次）；更早历史日期不补发。
 - 日期按 `Asia/Shanghai` 计算，调度目标为北京时间早上 07:00；日志写入本机轮转文件并在失败时返回非零退出码，便于调度运行与手动排查。
 
 不承诺任一外部服务故障时仍发送一封内容不可靠的“降级简报”。失败时保留错误和 trace，在网页显示状态；有效简报仍可查看。只有校验通过的简报才发送。
@@ -30,7 +30,7 @@
 | FastAPI + Jinja2 | 身份、订阅、历史是简单表单和阅读页，服务端模板即可完成并直接复用 Python 数据层 | React/Vue 会增加构建、路由和 API 维护工作，当前没有复杂交互来支撑这份成本 |
 | SMTP | 对每天发一封邮件，SMTP 配置量小、可由进程内调度无人值守调用 | Agent Mail 等需要逐封确认的通道不适合无人值守；暂不引入邮件服务商 API，因为需求没有模板、投递分析或批量发送要求 |
 | 受限 `bash(command)` | 保留需求要求的命令工具，用现有白名单支持常见目录/文本检查；当前命令由 Python 在受限路径内实现，跨平台且不启动任意 shell | `shell=True` 或任意子进程可让模型运行删除、下载、持久化等任意命令；以后若改用 `subprocess`，仍应 `shell=False`、白名单和超时 |
-| APScheduler（随 FastAPI 启动） | 交付与演示只有一个启动入口——web 服务自带调度，免操作系统配置；任务复用统一 `run_daily()`；单实例不重叠 + SQLite 原子认领双重防重 | Windows 任务计划程序：逐机手工配置、演示不便；双调度器：重复触发风险。错过的自动触发不补跑（README 说明） |
+| APScheduler（随 FastAPI 启动） | 交付与演示只有一个启动入口——web 服务自带调度，免操作系统配置；任务复用统一 `run_daily()`；网页可改推送时间、可手动触发；单实例不重叠 + SQLite 原子认领双重防重 | Windows 任务计划程序：逐机手工配置、演示不便；双调度器：重复触发风险。历史日期不补发（当天启动补跑，README 说明） |
 | SQLite 精简 trace | 一份本地记录足以查看工具选择和失败原因，也能支撑测试 | Langfuse/OTel 对单机单用户增加服务/配置/敏感数据流转；出现远程团队协作或线上监控需求后再评估 |
 | 本机单用户，不做登录 | 当前需求是一个用户设置自己的订阅，且页面默认只在本机开放；不引入账号系统即可完成目标 | 多用户和公网部署需要认证、授权、隔离及账户恢复，当前没有对应需求，做了反而扩大安全面 |
 
@@ -51,7 +51,7 @@
 | HTML 安全 | `markdown-it-py`（禁原始 HTML）+ `nh3` allowlist | 将模型生成的 Markdown 安全渲染为网页和邮件 HTML | 自行用正则写 sanitizer：难以完整处理不可信 HTML |
 | Web | FastAPI、Jinja2、原生 HTML 表单和少量 JavaScript、FastAPI TestClient | 三类简单页面共用 Python 服务和数据层，无前端构建链；仅监听 `127.0.0.1` | React/Vue：增加构建、API 状态和部署维护，但交互复杂度不足以抵消成本 |
 | 推送 | Python `smtplib`，SSL/STARTTLS；SMTP 授权码来自环境变量，收件人来自 profile | 每日单封可无人值守发送；生成/校验与外部发送副作用分离 | 需人工确认的 Agent Mail；当前不需要邮件服务商 API 的模板/统计能力 |
-| 调度 | APScheduler（进程内，随 FastAPI 启动）：每日 Asia/Shanghai 07:00（`DAILY_RUN_AT` 可配），调用统一 `run_daily()` | 单入口交付（启动 web 即含调度），免操作系统配置；`max_instances=1` + `coalesce` 不重叠，原子认领兜底 | Windows 任务计划程序：逐机配置、演示成本高；持久化任务库 / 第二调度器：当前不需要 |
+| 调度 | APScheduler（进程内）：推送时间默认 `.env`、网页可改（存 SQLite 并即时重排）；启动补跑当天；网页「立即运行」；统一调用 `run_daily()` | 单入口交付（启动 web 即含调度），免操作系统配置；`max_instances=1` + `coalesce` 不重叠，原子认领兜底 | Windows 任务计划程序：逐机配置、演示成本高；持久化任务库 / 第二调度器：当前不需要 |
 | 测试与质量 | pytest、Ruff；mock LLM/SMTP；FastAPI TestClient | 离线覆盖确定性分支，受控测试直接证明模型结果影响下一步工具选择 | 把真实模型连续多天行为当作唯一验收；引入端到端测试平台 |
 | 日志与配置 | Python logging + 本机轮转日志；`.env` / 环境变量；trace 脱敏后写 SQLite | 方便任务计划程序定位错误且不新增服务；密钥不进数据库、trace 或日志 | Langfuse/OTel：MVP 尚无远程团队观测需求，且会扩大敏感数据流转 |
 
@@ -101,6 +101,8 @@ def save_subscription(db: Database, topics: list[str], keywords: list[str],
 def get_subscription(db: Database) -> dict
 def get_briefing(db: Database, date: str) -> dict | None
 def list_briefings(db: Database, limit: int = 30) -> list[dict]
+def get_setting(db: Database, key: str) -> str | None
+def set_setting(db: Database, key: str, value: str) -> None
 def claim_daily_run(db: Database, date: str, stale_after_minutes: int = 120) -> str
 def mark_generated(db: Database, date: str, *, md_path: str, html_path: str,
                    summary: str, item_count: int) -> None
@@ -121,6 +123,7 @@ def insert_run(db: Database, date: str, started_at: str, ended_at: str,
   started_at, sent_at, failure_stage, error, updated_at)`
 - `agent_runs(id, date, started_at, ended_at, status, steps, tool_calls,
   tokens_in, tokens_out, trace_json, error)`
+- `settings(key PRIMARY KEY, value, updated_at)`：网页可改的运行参数（当前为 `daily_run_at`），避免写环境变量或文件。
 
 不要另建 `articles` 去重表：MVP 只要求在当次素材中按完全相同 URL 去重；跨日是否重复可作为后续改进。用户偏好作为 JSON 数组存储，读写时验证类型和条数上限。
 
@@ -132,7 +135,7 @@ def insert_run(db: Database, date: str, started_at: str, ended_at: str,
 2. `generating`、`generated` 或 `sending` 且 `started_at` 未超过 120 分钟，返回 `already_running`。
 3. 不存在、模型阶段失败、SMTP 失败但产物缺失/不合格，或已过期的 `generating`，原子地写为 `generating` 并增加 `attempt`，返回 `generate`。
 4. `generated`/`sending` 过期，或 `failure_stage=smtp` 时，若简报文件仍通过校验则原子地写为 `sending` 并增加 `attempt`，返回 `retry_send`；pipeline 复用已有文件，不再次调用 LLM。文件不合格则走 `generate` 分支。
-5. `force` 不属于 MVP 接口。需要重发时先提供明确的人工操作语义，避免误发。
+5. `force` 不属于 MVP 接口。网页「立即运行一次」不等同 `force`：它走普通 `run_daily`，`sent` 状态依然会被原子认领跳过，不会重复发送；需要重发时先提供明确的人工操作语义，避免误发。
 
 状态转换：`generating → generated → sending → sent`；任一失败写为 `failed` 并保存阶段与错误。重试失败运行时复用当天记录并增加 attempt，不插入违反唯一约束的新简报。claim 对既有产物的检查是轻量级的：路径位于 `data/briefings/` 内、文件存在且非空；标题、链接、条数等完整内容校验仍由 pipeline 在发送前执行。SMTP 已接受邮件但客户端未收到成功响应时可能产生重复投递；SMTP 不提供端到端 exactly-once 保证，状态记录只能减少重复，不能消除此边界。
 
@@ -196,7 +199,7 @@ def run_daily(date: str | None = None, *, dry_run: bool = False,
 
 `run_daily` 是 CLI、定时任务和任何手动触发入口共用的唯一入口。未显式传入日期时按 `Asia/Shanghai` 取当天。流程为：检查必要配置和 profile/subscription → 原子 claim → 若返回 `generate` 则调 Agent、校验并保存；若返回 `retry_send` 则重校验现有文件 → 标记 `sending` → SMTP 发送 → 更新状态并保存 trace。异常路径必须 `mark_failed`，不能留下永久占用的运行状态。
 
-邮件使用 SMTP SSL/STARTTLS 配置；身份页填写的邮箱是收件人，SMTP 用户/授权码是发件通道凭据，不混为一个字段。发送能力不暴露成 Agent 工具。重试次数和间隔配置化；SMTP 未配置时标记 `failed`，网页仍可查看已生成简报。Web 页面只做三项：身份设置、订阅设置、历史简报列表/详情。运行状态可在历史列表展示；不实现单独 trace 页面、分页 API、WebSocket 或公网鉴权体系。
+邮件使用 SMTP SSL/STARTTLS 配置；身份页填写的邮箱是收件人，SMTP 用户/授权码是发件通道凭据，不混为一个字段。发送能力不暴露成 Agent 工具。重试次数和间隔配置化；SMTP 未配置时标记 `failed`，网页仍可查看已生成简报。Web 页面只做三项：身份设置、订阅设置、历史简报列表/详情（历史页含推送时间设置、「立即运行一次」与每行「查看」入口）。运行状态可在历史列表展示；不实现单独 trace 页面、分页 API、WebSocket 或公网鉴权体系。
 
 ## 4. 三天冲刺安排
 
@@ -231,7 +234,7 @@ def run_daily(date: str | None = None, *, dry_run: bool = False,
 
 阶段 6：完成三个页面，用 FastAPI TestClient 验证表单写库、偏好回读、历史列表/详情和失败状态展示。
 
-阶段 7：接入进程内调度：启动 `python -m news_agent.web` 时注册 APScheduler 每日任务（`DAILY_RUN_AT`，Asia/Shanghai，单实例不重叠、`MemoryJobStore`），服务关闭即停止；错过的自动触发不补跑（README 说明，手动跑 CLI）。测试覆盖时间解析、任务参数、任务函数调用 `run_daily()`、随应用启停。真实 DeepSeek、Tavily 和 SMTP 联调分别记录结果。
+阶段 7：接入进程内调度：启动 `python -m news_agent.web` 时注册 APScheduler 每日任务（推送时间可网页修改并存 SQLite，Asia/Shanghai，单实例不重叠、`MemoryJobStore`），服务关闭即停止；启动补跑当天、历史日期不补发；网页「立即运行一次」排队执行。测试覆盖时间解析、有效时间回退、补跑分支、网页改时间即时重排、手动触发排队、随应用启停。真实 DeepSeek、Tavily 和 SMTP 联调分别记录结果。
 
 常用验证：
 

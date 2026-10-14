@@ -2,10 +2,28 @@
 {% block title %}历史简报 · 每日 AI 简报{% endblock %}
 {% block heading %}历史简报{% endblock %}
 {% block content %}
+<div class="card controls">
+  <form method="post" action="/schedule">
+    <label>每日推送时间
+      <input type="time" name="daily_at" value="{{ daily_at }}" required>
+    </label>
+    <button type="submit">保存时间</button>
+  </form>
+  <form method="post" action="/run-now">
+    <button type="submit">立即运行一次</button>
+  </form>
+  <p class="muted">时间保存在数据库中、保存即生效（优先于 .env 默认值）；「立即运行」在后台执行，
+     当天已发送或运行中会自动跳过。</p>
+</div>
+
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if saved %}<p class="ok">推送时间已保存，已即时生效。</p>{% endif %}
+{% if triggered %}<p class="ok">已触发，正在后台生成；稍后刷新本页查看状态。</p>{% endif %}
+
 {% if briefings %}
 <table>
   <tr>
-    <th>日期</th><th>状态</th><th>条数</th><th>摘要</th><th>备注</th>
+    <th>日期</th><th>状态</th><th>条数</th><th>摘要</th><th>备注</th><th></th>
   </tr>
   {% for b in briefings %}
   <tr>
@@ -14,6 +32,7 @@
     <td>{{ b.item_count if b.item_count is not none else '—' }}</td>
     <td>{{ b.summary or '' }}</td>
     <td class="muted">{{ b.error or '' }}</td>
+    <td><a class="button" href="/briefings/{{ b.date }}">查看</a></td>
   </tr>
   {% endfor %}
 </table>
