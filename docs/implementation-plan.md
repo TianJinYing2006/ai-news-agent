@@ -14,8 +14,8 @@
 - 手写 ReAct 循环。保留需求指定的五个工具，并加入 RSS、网页搜索、正文抓取和结束工具。网络工具给模型能力，不规定它必须按固定顺序调用。
 - 邮件作为推送渠道。邮件发送由 pipeline 在简报通过校验后执行，模型不能自行发送。
 - trace 保存在 SQLite，供排障和验证循环行为；MVP 不接 Langfuse/OTel，不做独立运行轨迹页面。
-- Windows 任务计划程序作为唯一日常调度器；不同时配置 WorkBuddy，避免不必要的双触发路径。
-- 日期按 `Asia/Shanghai` 计算，调度目标为北京时间早上 07:00；日志写入本机轮转文件并在失败时返回非零退出码，便于任务计划程序显示失败。
+- 调度采用进程内 APScheduler（随 FastAPI 启动，每日 07:00 `Asia/Shanghai`，时间经 `DAILY_RUN_AT` 配置）：单进程单 worker、任务不重叠（`max_instances=1`、`MemoryJobStore` 不引入持久化任务库）；不引入第二调度器（含系统任务计划程序）。服务未运行期间错过的任务不自动补跑。
+- 日期按 `Asia/Shanghai` 计算，调度目标为北京时间早上 07:00；日志写入本机轮转文件并在失败时返回非零退出码，便于调度运行与手动排查。
 
 不承诺任一外部服务故障时仍发送一封内容不可靠的“降级简报”。失败时保留错误和 trace，在网页显示状态；有效简报仍可查看。只有校验通过的简报才发送。
 
@@ -28,9 +28,9 @@
 | RSS + Tavily 搜索 | RSS 提供低成本稳定候选源，Tavily 给模型按需补搜的能力；来源组合和调用次数仍由模型选择 | 纯搜索增加额度依赖且覆盖不稳定；固定抓完所有 RSS 再总结会把流程顺序交给程序，削弱核心要求 |
 | SQLite + 文件归档 | 单机单用户、每天一份，SQLite 足够保存设置、状态和 trace；Markdown/HTML 文件便于网页、邮件和现有文件工具读取 | PostgreSQL 需要单独服务；把全文只放数据库会让文件工具无法检索，数据库也没有带来当前需要的查询能力 |
 | FastAPI + Jinja2 | 身份、订阅、历史是简单表单和阅读页，服务端模板即可完成并直接复用 Python 数据层 | React/Vue 会增加构建、路由和 API 维护工作，当前没有复杂交互来支撑这份成本 |
-| SMTP | 对每天发一封邮件，SMTP 配置量小、可由 Windows 定时任务无人值守调用 | Agent Mail 等需要逐封确认的通道不适合无人值守；暂不引入邮件服务商 API，因为需求没有模板、投递分析或批量发送要求 |
+| SMTP | 对每天发一封邮件，SMTP 配置量小、可由进程内调度无人值守调用 | Agent Mail 等需要逐封确认的通道不适合无人值守；暂不引入邮件服务商 API，因为需求没有模板、投递分析或批量发送要求 |
 | 受限 `bash(command)` | 保留需求要求的命令工具，用现有白名单支持常见目录/文本检查；当前命令由 Python 在受限路径内实现，跨平台且不启动任意 shell | `shell=True` 或任意子进程可让模型运行删除、下载、持久化等任意命令；以后若改用 `subprocess`，仍应 `shell=False`、白名单和超时 |
-| 单一 Windows 任务计划程序 | 应用运行在本机，系统调度器足以触发每日 CLI；单入口更容易排查 | 双调度器增加重复触发、凭据和运维问题；APScheduler 要求常驻进程，不适合关机/休眠的桌面环境 |
+| APScheduler（随 FastAPI 启动） | 交付与演示只有一个启动入口——web 服务自带调度，免操作系统配置；任务复用统一 `run_daily()`；单实例不重叠 + SQLite 原子认领双重防重 | Windows 任务计划程序：逐机手工配置、演示不便；双调度器：重复触发风险。错过的自动触发不补跑（README 说明） |
 | SQLite 精简 trace | 一份本地记录足以查看工具选择和失败原因，也能支撑测试 | Langfuse/OTel 对单机单用户增加服务/配置/敏感数据流转；出现远程团队协作或线上监控需求后再评估 |
 | 本机单用户，不做登录 | 当前需求是一个用户设置自己的订阅，且页面默认只在本机开放；不引入账号系统即可完成目标 | 多用户和公网部署需要认证、授权、隔离及账户恢复，当前没有对应需求，做了反而扩大安全面 |
 
@@ -51,7 +51,7 @@
 | HTML 安全 | `markdown-it-py`（禁原始 HTML）+ `nh3` allowlist | 将模型生成的 Markdown 安全渲染为网页和邮件 HTML | 自行用正则写 sanitizer：难以完整处理不可信 HTML |
 | Web | FastAPI、Jinja2、原生 HTML 表单和少量 JavaScript、FastAPI TestClient | 三类简单页面共用 Python 服务和数据层，无前端构建链；仅监听 `127.0.0.1` | React/Vue：增加构建、API 状态和部署维护，但交互复杂度不足以抵消成本 |
 | 推送 | Python `smtplib`，SSL/STARTTLS；SMTP 授权码来自环境变量，收件人来自 profile | 每日单封可无人值守发送；生成/校验与外部发送副作用分离 | 需人工确认的 Agent Mail；当前不需要邮件服务商 API 的模板/统计能力 |
-| 调度 | Windows 任务计划程序，每日 Asia/Shanghai 07:00，调用统一 CLI | 本机脚本可由系统触发，关机错过任务可配置补跑 | APScheduler：需要常驻进程；第二调度器：带来重复触发风险 |
+| 调度 | APScheduler（进程内，随 FastAPI 启动）：每日 Asia/Shanghai 07:00（`DAILY_RUN_AT` 可配），调用统一 `run_daily()` | 单入口交付（启动 web 即含调度），免操作系统配置；`max_instances=1` + `coalesce` 不重叠，原子认领兜底 | Windows 任务计划程序：逐机配置、演示成本高；持久化任务库 / 第二调度器：当前不需要 |
 | 测试与质量 | pytest、Ruff；mock LLM/SMTP；FastAPI TestClient | 离线覆盖确定性分支，受控测试直接证明模型结果影响下一步工具选择 | 把真实模型连续多天行为当作唯一验收；引入端到端测试平台 |
 | 日志与配置 | Python logging + 本机轮转日志；`.env` / 环境变量；trace 脱敏后写 SQLite | 方便任务计划程序定位错误且不新增服务；密钥不进数据库、trace 或日志 | Langfuse/OTel：MVP 尚无远程团队观测需求，且会扩大敏感数据流转 |
 
@@ -208,14 +208,14 @@ def run_daily(date: str | None = None, *, dry_run: bool = False,
 |---|---|---|
 | **第 1 天 · 10/14** | 完成 SQLite schema/init、profile/subscription CRUD、状态机和 `claim_daily_run`；用 `BEGIN IMMEDIATE` 实现唯一运行认领、sent 跳过、SMTP-only 重试、120 分钟陈旧租约回收。补 `fetch_url` 的 DNS/IP 检查、每跳重检、超时和响应体上限。 | 存储并发测试证明同日两个 claim 只有一个可生成；租约和 SMTP 重试分支测试通过；SSRF 对 loopback/私网/link-local/跳转目标有拒绝测试；原有工具测试仍通过。 |
 | **第 2 天 · 10/15** | 完成提示词与 DeepSeek client、ReAct 循环和脱敏 trace；实现 finish 输出校验、Markdown/HTML 渲染净化、SMTP 发送；接通 `run_daily` 的生成到发信路径。 | 假 client 覆盖工具结果回灌并改变下一步选择、finish、错误、循环/预算限制；非法路径/缺链接不能发送；mock SMTP 成功与失败可验证；SMTP 重试复用产物而不重跑 Agent。 |
-| **第 3 天 · 10/16** | 完成 FastAPI 三页与表单、历史列表/详情、CLI dry-run/日志和退出码；补端到端 mock 流程；配置 Windows 任务计划程序；有凭据则执行一次真实服务联调。整理 README 进度和本机配置说明。 | 全量 pytest 与 Ruff 通过；TestClient 验证资料/偏好写读、历史与失败状态；dry-run 不发信不改正式状态；任务计划程序手动启动成功并生成日志；逐项记录真实服务结果或未完成原因。 |
+| **第 3 天 · 10/16** | 完成 FastAPI 三页与表单、历史列表/详情、CLI dry-run/日志和退出码；补端到端 mock 流程；接入进程内 APScheduler（随 web 服务启停，单实例不重叠）；有凭据则执行一次真实服务联调。整理 README 进度和本机配置说明。 | 全量 pytest 与 Ruff 通过；TestClient 验证资料/偏好写读、历史与失败状态；dry-run 不发信不改正式状态；启动 web 后调度器注册成功、关闭即停止；逐项记录真实服务结果或未完成原因。 |
 
 ### 三天内的范围控制
 
 - **必须交付**：本机单用户可配置、Agent 自主工具循环、简报归档/页面、SQLite 防重、CLI、测试和每日调度配置。
 - **凭据到位才做真实验收**：DeepSeek 真实生成、Tavily 实际搜索、SMTP 实际投递。Tavily 是可选来源；没有它仍可验 RSS 与 Agent 主流程。
 - **不纳入三天承诺**：公网部署/登录、多用户、跨日文章去重、独立 trace 控制台、第二调度器、邮件 exactly-once 保证。
-- **缓冲规则**：若第 1 天原子认领或 SSRF 验收未过，第 2 天先完成安全与存储修复，压缩真实服务联调时间；若第 2 天 Agent/渲染/发送链路未通，第 3 天优先完成 mock 闭环和页面/CLI 验收，调度只做任务配置与手动启动，不扩展功能。
+- **缓冲规则**：若第 1 天原子认领或 SSRF 验收未过，第 2 天先完成安全与存储修复，压缩真实服务联调时间；若第 2 天 Agent/渲染/发送链路未通，第 3 天优先完成 mock 闭环和页面/CLI 验收，调度只做 APScheduler 接线与启动验证，不扩展功能。
 
 ## 5. 实施阶段与验收
 
@@ -231,7 +231,7 @@ def run_daily(date: str | None = None, *, dry_run: bool = False,
 
 阶段 6：完成三个页面，用 FastAPI TestClient 验证表单写库、偏好回读、历史列表/详情和失败状态展示。
 
-阶段 7：配置一个 Windows 任务计划程序任务，指定当前用户、venv Python、模块入口和工作目录；按设备情况开启“唤醒计算机运行此任务”和错过计划后尽快运行。手动运行一次，再用短间隔测试任务验证日志/退出码；最后改为每天早上运行。真实 DeepSeek、Tavily 和 SMTP 联调分别记录结果。
+阶段 7：接入进程内调度：启动 `python -m news_agent.web` 时注册 APScheduler 每日任务（`DAILY_RUN_AT`，Asia/Shanghai，单实例不重叠、`MemoryJobStore`），服务关闭即停止；错过的自动触发不补跑（README 说明，手动跑 CLI）。测试覆盖时间解析、任务参数、任务函数调用 `run_daily()`、随应用启停。真实 DeepSeek、Tavily 和 SMTP 联调分别记录结果。
 
 常用验证：
 

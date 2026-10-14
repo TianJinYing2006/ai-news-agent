@@ -3,20 +3,26 @@
 - 只监听 `127.0.0.1`（见 `__main__.py`），单机单用户，零登录；
 - 服务端 Jinja2 渲染 + 普通表单 POST（PRG 模式），无构建链、无前端路由；
 - 简报详情从归档的 `.md` 重新走 `render_body_html`（markdown-it 关闭原始 HTML +
-  nh3 allowlist）后嵌入页面——正文只读文件不入库，页面上没有未净化的模型输出。
+  nh3 allowlist）后嵌入页面——正文只读文件不入库，页面上没有未净化的模型输出；
+- 启动时注册进程内调度（APScheduler，见 `scheduler.py`），关闭即停止；
+  `enable_scheduler=False` 供测试关闭。
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from ..briefing import render_body_html
 from ..config import BRIEFINGS_DIR
+from ..run_daily import RunDeps
 from ..storage import (
     Database,
     get_briefing,
@@ -27,18 +33,41 @@ from ..storage import (
     save_profile,
     save_subscription,
 )
+from .scheduler import build_scheduler
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
-def create_app(*, db: Database | None = None, briefings_dir: Path | None = None) -> FastAPI:
-    """构建应用。`db` / `briefings_dir` 可注入，便于 TestClient 使用临时目录。"""
+def create_app(
+    *,
+    db: Database | None = None,
+    briefings_dir: Path | None = None,
+    run_deps: RunDeps | None = None,
+    enable_scheduler: bool = True,
+) -> FastAPI:
+    """构建应用。`db` / `briefings_dir` / `run_deps` 可注入；测试可关调度器。"""
     database = db or Database()
     briefings = Path(briefings_dir) if briefings_dir else BRIEFINGS_DIR
     init_db(database)
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-    app = FastAPI(title="每日 AI 简报", docs_url=None, redoc_url=None, openapi_url=None)
+    scheduler: BackgroundScheduler | None = None
+    if enable_scheduler:
+        deps = run_deps or RunDeps.default()
+        scheduler = build_scheduler(deps, at=deps.config.daily_run_at)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if scheduler is not None:
+            scheduler.start()
+        yield
+        if scheduler is not None and scheduler.running:
+            scheduler.shutdown(wait=False)
+
+    app = FastAPI(
+        title="每日 AI 简报", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan
+    )
+    app.state.scheduler = scheduler
 
     @app.get("/", include_in_schema=False)
     def home() -> RedirectResponse:

@@ -51,6 +51,8 @@ class Config:
     llm: LLMConfig
     tavily_api_key: str
     smtp: SMTPConfig
+    # 进程内调度时间（HH:MM，Asia/Shanghai），随 web 服务启动生效；见 web/scheduler.py
+    daily_run_at: str = "07:00"
 
     @classmethod
     def load(cls, env_file: Path | None = None) -> Config:
@@ -76,6 +78,7 @@ class Config:
                 retries=int(os.getenv("SMTP_RETRIES", "2")),
                 retry_delay=float(os.getenv("SMTP_RETRY_DELAY", "5")),
             ),
+            daily_run_at=os.getenv("DAILY_RUN_AT", "07:00"),
         )
 
 

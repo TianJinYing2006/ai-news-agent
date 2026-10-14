@@ -34,7 +34,7 @@ def web(tmp_path: Path):
     briefings.mkdir()
     db = Database(tmp_path / "web.db", briefings_dir=briefings)
     init_db(db)
-    app = create_app(db=db, briefings_dir=briefings)
+    app = create_app(db=db, briefings_dir=briefings, enable_scheduler=False)
     yield TestClient(app), db, briefings
     db.close()
 
