@@ -560,7 +560,7 @@ GET  /api/briefings/{date}      单篇 HTML 正文
 | # | 风险 | 等级 | 对策 |
 |---|---|---|---|
 | 1 | `reasoning_content` 未回传 → 400 | **高** | 整条 `messages.append(msg)`，禁止手工重建 assistant 消息；单测断言消息里含该字段 |
-| 2 | `bash` 工具被模型用来搞破坏 | **高** | 命令白名单（`ls/cat/grep/wc/date/head/tail`）+ 路径锁在 `data/` + 不启动任意 shell + 禁用管道、重定向和命令拼接字符 |
+| 2 | `bash` 工具被模型用来搞破坏 | **高** | 真实 Bash 子进程执行命令白名单（`ls/cat/grep/wc/date/head/tail`）；路径解析后锁在 `data/`；禁止管道、重定向、命令替换与拼接；清理子进程环境、限制超时和输出；不开放写入或网络命令 |
 | 3 | 模型死循环狂烧钱 | 中 | 三道硬闸（max_steps / token_budget / loop 指纹检测） |
 | 4 | RSS 源失效或改版 | 中 | 9 个实测可用源（另有 7 个已剔除并记录原因）；`fetch_rss` 失败返回明确错误，让模型自己换源或用 `search_web` 兜底 |
 | 5 | 抓到付费墙/JS 渲染页面 | 低 | `fetch_url` 抽取正文长度 < 200 字符时返回"正文抓取失败"提示，模型自行改用 RSS 摘要 |
