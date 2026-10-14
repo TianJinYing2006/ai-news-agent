@@ -6,6 +6,9 @@
 **每日 AI 新闻简报 Agent**：每天按设定时间，由大模型自主调用工具（RSS / 联网搜索 / 正文抓取），
 边查、边筛、边写，生成一份当日 AI 新闻简报推送到邮箱。
 
+*A local-first daily AI news briefing agent — a hand-written ReAct loop where the model itself
+decides which tools to call and in what order, without a hardcoded pipeline.*
+
 核心设计点是**工具调用顺序完全由大模型决定**——不是"先抓完 RSS，再筛选，再总结"的固定流水线，
 而是手写 ReAct 循环：模型发起工具调用、看到真实结果、再决定下一步（继续搜、换源、抓正文、还是结束）。
 
@@ -21,7 +24,7 @@
   受限 `bash`（纯 Python 实现，不启动任意 shell）、Markdown 双重净化（禁原始 HTML + nh3 allowlist）。
 - **可运维**：`--dry-run` 全链路演练（不发信不改状态）、轮转日志与退出码、启动补跑、
   网页可配推送时间与「立即运行一次」。
-- **工程实践**：本仓库真实执行「一需求 = 一分支 = 一 PR = CLI 校验」，共 17 个 PR；CI 全绿。
+- **工程实践**：本仓库真实执行「一需求 = 一分支 = 一 PR = CLI 校验」，共 19 个 PR（含 2 次 release）；CI 全绿。
 
 ## 60 秒本地体验（Windows）
 
@@ -62,6 +65,37 @@ flowchart TD
 
 一条主线：**网页配置偏好 → 调度触发 → 模型自主选工具产出简报 → 校验通过才落库归档并发信**；
 失败保留错误与 trace，网页可见，重跑规则明确（SMTP 失败只重发、不重跑模型）。
+
+## 功能清单（需求 → 实现）
+
+| 能力 | 实现方式 |
+|---|---|
+| 网页填写身份与订阅偏好 | 三页表单 + SQLite（身份 / 话题 / 关键词 / 排除词 / 条数上限） |
+| 每日定时生成并推送 | APScheduler 进程内调度 + 启动补跑 + 网页「立即运行一次」，统一走 `run_daily` |
+| 工具顺序由 LLM 决定 | 手写 ReAct 循环；受控假 client 测试钉住"上一步结果影响下一步选择" |
+| 重复触发不重复发信 | `BEGIN IMMEDIATE` 原子认领 + 状态机 + `sent` 终态；SMTP 失败只重发、不重跑模型 |
+| 失败可排查、可重试 | 错误 + 脱敏 trace 存 `agent_runs` 网页可见；`--dry-run` 全链路演练不改状态 |
+| 安全与凭据 | SSRF 逐跳复查、路径白名单、受限 bash、HTML 双重净化；凭据只在本机环境变量 |
+| 历史简报浏览 | 归档 `md/html` + 列表/详情页（净化渲染，正文只读文件不入库） |
+
+## 项目结构
+
+```text
+src/news_agent/
+├─ agent/        手写 ReAct 循环 · 提示词 · DeepSeek 客户端
+├─ tools/        9 个工具 + netguard（SSRF / 超时 / 响应体上限）
+├─ storage/      SQLite：原子认领、状态机、设置、trace
+├─ delivery/     SMTP 发送（编排层职责，不进工具列表）
+├─ web/          FastAPI 三页 + 进程内调度（APScheduler）
+├─ sources/      RSS 源清单（9 个实测可用的国内源）
+├─ briefing.py   简报校验 / 渲染净化 / 原子归档
+├─ run_daily.py  编排与 CLI（唯一业务入口）
+└─ demo_seed.py  演示数据（可一键清除）
+tests/           159 项离线单测（假 client / 假 SMTP / MockTransport）
+data/            运行产物（gitignore）：briefings/ · workspace/ · logs/ · SQLite
+docs/            实施计划（权威契约）· 技术选型论证
+start.cmd        一键启动（Windows，双击即用）
+```
 
 ## 为什么手写循环而不是用框架
 
@@ -120,6 +154,54 @@ RSS 源 404、正文是付费墙、今天内容特别少——这些情况下只
 改用**受控测试**：用假 client 构造两条路径，一个工具结果导致模型选择搜索，
 另一个结果导致模型直接结束；断言循环确实把结果回传、并把下一次工具选择交给模型，
 而没有在 Python 里规定调用顺序。真实 trace 只用于排障。
+
+## 开发工作流（本仓库的真实约定）
+
+- **一需求 = 一分支 = 一 PR**：`feat/` / `fix/` / `docs/` / `chore/` 前缀，需求分支从 `dev` 切出、
+  PR 合回 `dev`；`main` 只接受来自 `dev` 的 release 合并；
+- PR 前本机必跑 CLI 校验（`pytest -q` + `ruff check .`），GitHub Actions 再跑一遍（双保险）；
+- 硬性约束集中在 [`AGENTS.md`](AGENTS.md)：三道硬闸、不可撤销副作用不进工具层、
+  凭据不出本机、MVP 边界清单；
+- 已按此流程合并 19 个 PR（含 2 次 release 到 `main`）。
+
+## FAQ
+
+<details><summary>没有 API key / 邮箱凭据能体验吗？</summary>
+
+能。网页浏览、演示数据（`python -m news_agent.demo_seed`）、全部单测都不需要凭据；
+只有真实生成与发信需要 `DEEPSEEK_API_KEY` / `SMTP_USER` / `SMTP_PASS`。
+</details>
+
+<details><summary>同一天会不会重复发信？</summary>
+
+不会（有测试钉住）：`BEGIN IMMEDIATE` 原子认领保证并发只跑一个；已发送的日期直接跳过；
+SMTP 失败后的重跑只重发邮件、不重跑模型。唯一理论边界是「SMTP 已接收但客户端没等到响应」，
+这是 SMTP 协议本身的限制，状态记录只能减少重复、无法消除。
+</details>
+
+<details><summary>关机 / 休眠错过推送时间怎么办？</summary>
+
+服务启动时会检查当天：已过推送时间且未发送 → 立即补跑一次；更早日期不补发，
+手动跑一次 `python -m news_agent.run_daily` 即可。
+</details>
+
+<details><summary>怎么改推送时间？</summary>
+
+网页「历史简报」页直接改：存 SQLite、保存即生效、优先于 `.env` 的 `DAILY_RUN_AT` 默认值。
+</details>
+
+<details><summary>数据存在哪？怎么重置？</summary>
+
+全部在 `data/`（已 gitignore）：`briefings/` 归档、`workspace/` 运行工作区、`logs/` 轮转日志、SQLite。
+演示数据用 `python -m news_agent.demo_seed --clean` 单独清除；删掉 `data/` 即整体重置（不影响环境变量里的凭据）。
+</details>
+
+<details><summary>为什么没有 Docker / 公网部署？</summary>
+
+MVP 明确定位单机单用户：只监听 `127.0.0.1`、零登录鉴权。公网部署需要认证、隔离与配额，
+超出当前需求且会扩大安全面；展示与演示用截图 + 一键启动已足够。
+（决策记录见 `docs/implementation-plan.md`。）
+</details>
 
 ## 快速开始（开发者）
 
