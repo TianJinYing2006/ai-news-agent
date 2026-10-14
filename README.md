@@ -5,7 +5,7 @@
 核心设计点是**工具调用顺序完全由大模型决定**——不是"先抓完 RSS，再筛选，再总结"的固定流水线，
 而是手写 ReAct 循环：模型发起工具调用、看到真实结果、再决定下一步（继续搜、换源、抓正文、还是结束）。
 
-> 状态：进行中。已完成技术选型、工具层与源清单；存储层、Agent 循环、编排层、前端与调度开发中。
+> 状态：本机 MVP 全部完成并通过验收 —— 141 项单测与 Ruff 全绿；真实服务联调与首次正式投递已完成（2026-10-14）。
 > 详见下方「当前进度」。
 
 ---
@@ -48,7 +48,7 @@
 | 存储 | SQLite（WAL，原子认领 + 陈旧租约回收） |
 | Web | FastAPI + Jinja2，只监听 `127.0.0.1` |
 | 推送 | SMTP（脚本自带） |
-| 调度 | Windows 任务计划程序 |
+| 调度 | APScheduler（进程内，随 FastAPI 启动） |
 
 ## 数据流
 
@@ -92,15 +92,33 @@ RSS 源 404、正文是付费墙、今天内容特别少——这些情况下只
 ## 快速开始
 
 ```bash
-python -m venv .venv && ./.venv/Scripts/python.exe -m pip install -e .
-cp .env.example .env      # 填入 DEEPSEEK_API_KEY / TAVILY_API_KEY / SMTP 授权码
+python -m venv .venv && ./.venv/Scripts/python.exe -m pip install -e ".[dev]"
 
-./.venv/Scripts/python.exe -m pytest -q          # 单测
-./.venv/Scripts/python.exe -m news_agent.run_daily --dry-run
+# 凭据二选一（系统环境变量优先；都不阻塞代码编写与单测）：
+#   A) Windows 用户级环境变量（推荐）：setx DEEPSEEK_API_KEY "..." 等
+#   B) 项目 .env 兜底（已 gitignore）：cp .env.example .env 后填入
+
+./.venv/Scripts/python.exe -m pytest -q                        # 单测（离线 mock，不联网）
+./.venv/Scripts/python.exe -m news_agent.run_daily --dry-run   # 真链路演练：不发信、不改状态
+./.venv/Scripts/python.exe -m news_agent.web                   # 网页 + 每日调度（仅本机）：http://127.0.0.1:8000
 ```
 
-需要三个凭据，但**都不阻塞代码编写与单测**：DeepSeek API key、Tavily key（可选）、
-QQ 邮箱 SMTP 授权码。
+需要三个凭据：DeepSeek API key、Tavily key（可选）、QQ 邮箱 SMTP 授权码。
+推荐用 `setx` 写入用户级环境变量（`DEEPSEEK_API_KEY` / `SMTP_USER` / `SMTP_PASS`，
+可选 `TAVILY_API_KEY`）；缺少凭据时运行会给出明确错误，而不是静默降级。
+收件邮箱不在环境变量里——在网页「身份」页填写。
+
+## 每日运行与调度
+
+- 业务唯一入口是 `python -m news_agent.run_daily`：原子认领 → 模型自主选工具 → 简报校验 →
+  归档 `data/briefings/YYYY-MM-DD.md|.html` → SMTP 发送；同一天重复触发会跳过，
+  SMTP 失败后的重跑**只重发邮件、不重跑模型**；
+- 自动调度内置于 Web 服务：`python -m news_agent.web` 启动后，APScheduler 每天
+  `DAILY_RUN_AT`（默认 07:00，Asia/Shanghai）自动调用 `run_daily()`
+  - 单进程单 worker、任务不重叠（`max_instances=1`）；SQLite 原子认领兜底防重；
+  - **服务运行期间才会触发**：服务关闭 / 电脑休眠期间错过的任务不自动补跑，手动跑一次 CLI 即可；
+  - 发送时间改 `.env` 的 `DAILY_RUN_AT`（HH:MM）后重启服务生效；不做网页动态修改；
+- 日志写入 `data/logs/news_agent.log`（轮转）；CLI 成功退出码 0、失败 1。
 
 ## 当前进度
 
@@ -109,12 +127,15 @@ QQ 邮箱 SMTP 授权码。
 | 技术选型与实施计划 | ✅ `docs/` |
 | 工具层 9 个 + 15 项单测 | ✅ |
 | RSS 源清单（9 个可用 / 7 个已剔除并记录原因） | ✅ |
-| 存储层（原子认领、状态机、租约回收） | ⏳ |
-| Agent 循环（停止条件、错误回灌、trace） | ⏳ |
-| 简报校验、渲染（Markdown→HTML 净化）、SMTP | ⏳ |
-| 编排层与 CLI | ⏳ |
-| 前端三页（身份 / 订阅 / 历史简报） | ⏳ |
-| 调度与真实服务联调 | ⏳ |
+| 出网安全闸（SSRF 逐跳复查、超时、响应体上限） | ✅ |
+| 存储层（原子认领、状态机、租约回收） | ✅ |
+| Agent 循环（三道硬闸、错误回灌、脱敏 trace） | ✅ |
+| 简报校验、渲染净化、SMTP 发送（重试可配置） | ✅ |
+| 编排层与 CLI（dry-run、轮转日志、退出码） | ✅ |
+| 前端三页（身份 / 订阅 / 历史简报） | ✅ |
+| 进程内调度（APScheduler，随 web 服务启停） | ✅ |
+| 全量单测与静态检查（141 项 / Ruff） | ✅ |
+| 真实服务联调与首次正式投递 | ✅ 2026-10-14：tool-calling 两轮、SMTP 登录、dry-run（10 条/14 步）、正式投递（10 条/17 步/33 次工具调用，1 次尝试成功） |
 
 ## 文档
 

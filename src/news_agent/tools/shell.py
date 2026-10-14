@@ -153,4 +153,4 @@ def _clip(text: str) -> str:
     return text
 
 
-__all__ = ["bash", "ALLOWED_COMMANDS"]
+__all__ = ["ALLOWED_COMMANDS", "bash"]
