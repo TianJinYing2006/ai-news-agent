@@ -42,7 +42,7 @@ CLI 校验命令（PR 前必跑，全绿才可提 PR）：
 - **联网一律直连**（`trust_env=False`）：本机代理对所有目标站点不通；抓源必须带 User-Agent。
 - DeepSeek `deepseek-flash`：thinking 模式带 tools 时必须回传 `reasoning_content`，不要手工重建 assistant 消息。
 - 国外 RSS 源不可达；源清单见 `src/news_agent/sources/feeds.py`（9 个国内源实测可用）。
-- 凭据状态：已用 Windows 用户级环境变量配置（DeepSeek / SMTP / Tavily，2026-10-14）；真实联调记录：tool-calling 两轮自检、SMTP 登录认证、dry-run（10 条/14 步）；正式投递待一次真实运行。
+- 凭据状态：已用 Windows 用户级环境变量配置（DeepSeek / SMTP / Tavily，2026-10-14）；真实联调记录：tool-calling 两轮自检、SMTP 登录、dry-run（10 条/14 步）、正式投递（10 条/17 步/33 次工具调用，1 次成功）。
 - PyPI 直连慢，可临时用 `-i https://pypi.tuna.tsinghua.edu.cn/simple`。
 
 ## 关键路径
