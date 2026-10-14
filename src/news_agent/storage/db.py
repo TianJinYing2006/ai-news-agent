@@ -441,6 +441,12 @@ def insert_run(
         cur.close()
 
 
+def get_briefing(db: Database, date: str) -> dict | None:
+    """读取当天简报记录（pipeline 与网页历史页使用）。"""
+    _validate_date(date)
+    return db.fetchone("SELECT * FROM briefings WHERE date = ?", (date,))
+
+
 # ---------------------------------------------------------------------------
 # 内部工具
 # ---------------------------------------------------------------------------

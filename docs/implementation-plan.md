@@ -99,6 +99,7 @@ def get_profile(db: Database) -> dict | None
 def save_subscription(db: Database, topics: list[str], keywords: list[str],
                       exclude_keywords: list[str], max_items: int) -> None
 def get_subscription(db: Database) -> dict
+def get_briefing(db: Database, date: str) -> dict | None
 def claim_daily_run(db: Database, date: str, stale_after_minutes: int = 120) -> str
 def mark_generated(db: Database, date: str, *, md_path: str, html_path: str,
                    summary: str, item_count: int) -> None
@@ -181,13 +182,16 @@ def run_agent(client, *, system_prompt: str, user_prompt: str,
 ```python
 @dataclass
 class RunOutcome:
-    status: str  # sent | skipped | already_running | failed
+    status: str  # sent | skipped | already_running | dry_run | failed
     date: str
     briefing_path: Path | None
     message: str
 
-def run_daily(date: str | None = None) -> RunOutcome
+def run_daily(date: str | None = None, *, dry_run: bool = False,
+              deps: RunDeps | None = None) -> RunOutcome
 ```
+
+`RunDeps` 是装配点（配置、数据库、client 工厂、发送函数、工具注册表、目录），默认为真实实现，便于测试注入假 client 与假发送函数。dry-run 使用 `<date>-dry-run` 独立工作区走真实提示词、Agent 与校验，渲染只写临时目录：不发信、不改任何正式状态（含 `agent_runs`）。
 
 `run_daily` 是 CLI、定时任务和任何手动触发入口共用的唯一入口。未显式传入日期时按 `Asia/Shanghai` 取当天。流程为：检查必要配置和 profile/subscription → 原子 claim → 若返回 `generate` 则调 Agent、校验并保存；若返回 `retry_send` 则重校验现有文件 → 标记 `sending` → SMTP 发送 → 更新状态并保存 trace。异常路径必须 `mark_failed`，不能留下永久占用的运行状态。
 
