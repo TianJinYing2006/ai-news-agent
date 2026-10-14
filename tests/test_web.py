@@ -175,3 +175,41 @@ def test_home_redirects_to_briefings(web) -> None:
     r = client.get("/", follow_redirects=False)
     assert r.status_code == 307
     assert r.headers["location"] == "/briefings"
+
+
+# ---------- 调度控制（历史页） ----------
+
+
+def test_briefings_page_shows_schedule_controls(web) -> None:
+    client, _, _ = web
+    r = client.get("/briefings")
+    assert r.status_code == 200
+    assert 'name="daily_at"' in r.text
+    assert "立即运行一次" in r.text
+    assert "07:00" in r.text
+
+
+def test_schedule_save_and_invalid(web) -> None:
+    client, db, _ = web
+    r = client.post("/schedule", data={"daily_at": "08:30"}, follow_redirects=True)
+    assert r.status_code == 200 and "已保存" in r.text
+    assert storage.get_setting(db, storage.SETTING_DAILY_RUN_AT) == "08:30"
+
+    r = client.post("/schedule", data={"daily_at": "25:99"})
+    assert r.status_code == 200 and "超出范围" in r.text
+    assert storage.get_setting(db, storage.SETTING_DAILY_RUN_AT) == "08:30"  # 非法值不覆盖
+
+
+def test_run_now_without_scheduler(web) -> None:
+    client, _, _ = web
+    r = client.post("/run-now")
+    assert r.status_code == 200 and "未启用" in r.text
+
+
+def test_briefing_row_has_view_button(web) -> None:
+    client, db, briefings = web
+    _seed_sent(db, briefings, DATE_SENT, MD)
+    r = client.get("/briefings")
+    assert r.status_code == 200
+    assert "查看" in r.text
+    assert r.text.count(f'href="/briefings/{DATE_SENT}"') >= 2  # 日期链接 + 查看按钮

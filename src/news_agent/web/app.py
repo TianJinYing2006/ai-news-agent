@@ -4,7 +4,8 @@
 - 服务端 Jinja2 渲染 + 普通表单 POST（PRG 模式），无构建链、无前端路由；
 - 简报详情从归档的 `.md` 重新走 `render_body_html`（markdown-it 关闭原始 HTML +
   nh3 allowlist）后嵌入页面——正文只读文件不入库，页面上没有未净化的模型输出；
-- 启动时注册进程内调度（APScheduler，见 `scheduler.py`），关闭即停止；
+- 启动时注册进程内调度（APScheduler，见 `scheduler.py`），关闭即停止；启动时按需补跑当天；
+  历史页提供「推送时间设置」（存 SQLite，保存即重排）与「立即运行一次」（后台排队，防重不变）；
   `enable_scheduler=False` 供测试关闭。
 """
 
@@ -24,6 +25,7 @@ from ..briefing import render_body_html
 from ..config import BRIEFINGS_DIR
 from ..run_daily import RunDeps
 from ..storage import (
+    SETTING_DAILY_RUN_AT,
     Database,
     get_briefing,
     get_profile,
@@ -32,8 +34,16 @@ from ..storage import (
     list_briefings,
     save_profile,
     save_subscription,
+    set_setting,
 )
-from .scheduler import build_scheduler
+from .scheduler import (
+    build_scheduler,
+    effective_daily_at,
+    parse_at,
+    reschedule_daily_run,
+    schedule_catch_up,
+    schedule_manual_run,
+)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -51,10 +61,18 @@ def create_app(
     init_db(database)
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
+    deps = run_deps
+
+    def _effective_at() -> str:
+        default = deps.config.daily_run_at if deps is not None else "07:00"
+        return effective_daily_at(database, default)
+
     scheduler: BackgroundScheduler | None = None
     if enable_scheduler:
-        deps = run_deps or RunDeps.default()
-        scheduler = build_scheduler(deps, at=deps.config.daily_run_at)
+        deps = deps or RunDeps.default()
+        at = _effective_at()
+        scheduler = build_scheduler(deps, at=at)
+        schedule_catch_up(scheduler, deps, at=at)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -68,6 +86,7 @@ def create_app(
         title="每日 AI 简报", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan
     )
     app.state.scheduler = scheduler
+    app.state.run_deps = deps
 
     @app.get("/", include_in_schema=False)
     def home() -> RedirectResponse:
@@ -135,11 +154,46 @@ def create_app(
 
     # ---------- 历史简报 ----------
 
-    @app.get("/briefings", response_class=HTMLResponse)
-    def briefings_page(request: Request) -> HTMLResponse:
+    def _render_briefings(
+        request: Request,
+        *,
+        saved: int = 0,
+        triggered: int = 0,
+        error: str | None = None,
+    ) -> HTMLResponse:
         return templates.TemplateResponse(
-            request, "briefings.html", {"briefings": list_briefings(database)}
+            request,
+            "briefings.html",
+            {
+                "briefings": list_briefings(database),
+                "daily_at": _effective_at(),
+                "saved": saved,
+                "triggered": triggered,
+                "error": error,
+            },
         )
+
+    @app.get("/briefings", response_class=HTMLResponse)
+    def briefings_page(request: Request, saved: int = 0, triggered: int = 0) -> HTMLResponse:
+        return _render_briefings(request, saved=saved, triggered=triggered)
+
+    @app.post("/schedule", response_class=HTMLResponse)
+    def save_schedule(request: Request, daily_at: str = Form("")) -> HTMLResponse:
+        try:
+            parse_at(daily_at)
+        except ValueError as e:
+            return _render_briefings(request, error=str(e))
+        set_setting(database, SETTING_DAILY_RUN_AT, daily_at.strip())
+        if scheduler is not None:
+            reschedule_daily_run(scheduler, at=daily_at.strip())
+        return RedirectResponse("/briefings?saved=1", status_code=303)
+
+    @app.post("/run-now", response_class=HTMLResponse)
+    def run_now(request: Request) -> HTMLResponse:
+        if scheduler is None or deps is None:
+            return _render_briefings(request, error="调度器未启用，无法从网页触发运行")
+        schedule_manual_run(scheduler, deps)
+        return RedirectResponse("/briefings?triggered=1", status_code=303)
 
     @app.get("/briefings/{date}", response_class=HTMLResponse)
     def briefing_detail(request: Request, date: str) -> HTMLResponse:

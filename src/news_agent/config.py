@@ -51,7 +51,7 @@ class Config:
     llm: LLMConfig
     tavily_api_key: str
     smtp: SMTPConfig
-    # 进程内调度时间（HH:MM，Asia/Shanghai），随 web 服务启动生效；见 web/scheduler.py
+    # 推送时间默认值（HH:MM，Asia/Shanghai）；网页设置（存 SQLite）优先，见 web/scheduler.py
     daily_run_at: str = "07:00"
 
     @classmethod

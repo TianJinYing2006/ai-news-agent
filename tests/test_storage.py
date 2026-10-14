@@ -149,6 +149,26 @@ def test_subscription_rejects_bad_input(db: storage.Database) -> None:
             storage.save_subscription(db, [], [], [], bad_type)  # type: ignore[arg-type]
 
 
+# ---------- 运行设置 ----------
+
+
+def test_settings_roundtrip_and_upsert(db: storage.Database) -> None:
+    assert storage.get_setting(db, storage.SETTING_DAILY_RUN_AT) is None
+    storage.set_setting(db, storage.SETTING_DAILY_RUN_AT, "08:30")
+    assert storage.get_setting(db, storage.SETTING_DAILY_RUN_AT) == "08:30"
+    storage.set_setting(db, storage.SETTING_DAILY_RUN_AT, "09:00")
+    assert storage.get_setting(db, storage.SETTING_DAILY_RUN_AT) == "09:00"
+
+
+def test_settings_validation(db: storage.Database) -> None:
+    with pytest.raises(ValueError):
+        storage.set_setting(db, "", "x")
+    with pytest.raises(ValueError):
+        storage.set_setting(db, "k", "   ")
+    with pytest.raises(ValueError):
+        storage.set_setting(db, "k", "x" * 500)
+
+
 # ---------- 原子认领 ----------
 
 
