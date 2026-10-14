@@ -8,11 +8,14 @@
 from __future__ import annotations
 
 import json
+import socket
+from collections.abc import Callable
 from pathlib import Path
 
+import httpx
 import pytest
 
-from news_agent.tools import builtin, filesystem, shell
+from news_agent.tools import builtin, filesystem, netguard, news, shell
 from news_agent.tools.registry import ToolRegistry
 
 
@@ -168,3 +171,80 @@ def test_schemas_match_deepseek_format() -> None:
         assert set(fn) == {"name", "description", "parameters"}
         assert fn["parameters"]["type"] == "object"
         assert fn["description"].strip()
+
+
+# ---------- 出网安全闸（fetch_url / fetch_rss 经 netguard，docs §8 风险表） ----------
+
+
+def _fake_dns(monkeypatch: pytest.MonkeyPatch, mapping: dict[str, str]) -> None:
+    def fake(host: str, port: int | None, *args: object, **kwargs: object) -> list[tuple]:
+        if host not in mapping:
+            raise socket.gaierror(f"unknown host: {host}")
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                (mapping[host], port or 0),
+            )
+        ]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake)
+
+
+def _mock_fetch_client(
+    monkeypatch: pytest.MonkeyPatch, handler: Callable[[httpx.Request], httpx.Response]
+) -> None:
+    monkeypatch.setattr(
+        netguard,
+        "_client",
+        lambda: httpx.Client(
+            transport=httpx.MockTransport(handler),
+            timeout=netguard.TIMEOUT,
+            follow_redirects=False,
+        ),
+    )
+
+
+def test_fetch_url_blocks_private_target() -> None:
+    """模型给出的 loopback 地址必须被拦下，且不发出请求。"""
+    out = news.fetch_url("http://127.0.0.1:8000/")
+    assert "拒绝" in out
+
+
+def test_fetch_url_extracts_main_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_dns(monkeypatch, {"site.test": "93.184.216.34"})
+    html = (
+        "<html><head><title>标题</title></head><body><article><p>"
+        + "人工智能新闻内容。" * 40
+        + "</p></article></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, text=html, headers={"content-type": "text/html; charset=utf-8"}
+        )
+
+    _mock_fetch_client(monkeypatch, handler)
+    out = news.fetch_url("https://site.test/a")
+    assert "正文（来自" in out
+    assert "人工智能" in out
+
+
+def test_fetch_rss_rejects_oversized_feed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_dns(monkeypatch, {"feed.test": "93.184.216.34"})
+    monkeypatch.setattr(netguard, "MAX_RESPONSE_BYTES", 64)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, text="<rss>" + "x" * 500, headers={"content-type": "application/rss+xml"}
+        )
+
+    _mock_fetch_client(monkeypatch, handler)
+    out = news.fetch_rss("https://feed.test/rss")
+    assert "大小上限" in out
