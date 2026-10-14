@@ -45,7 +45,7 @@ def test_write_outside_root_rejected(sandbox: Path, tmp_path: Path) -> None:
     assert not outside.exists()
 
 
-# ---------- bash 白名单 ----------
+# ---------- bash 白名单与真实子进程 ----------
 
 
 def test_bash_rejects_dangerous_chars() -> None:
@@ -63,7 +63,20 @@ def test_bash_whitelisted_runs(sandbox: Path) -> None:
     (sandbox / "a.md").write_text("hello\nworld\n", encoding="utf-8")
     assert "a.md" in shell.bash("ls")
     assert "hello" in shell.bash("cat a.md")
-    assert "2 行" in shell.bash("wc a.md")
+    assert "a.md" in shell.bash("wc a.md")
+
+
+def test_bash_rejects_paths_outside_data_root(sandbox: Path, tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside.md"
+    outside.write_text("secret", encoding="utf-8")
+    out = shell.bash(f"cat {outside.as_posix()}")
+    assert "拒绝" in out
+    assert "secret" not in out
+
+
+def test_bash_rejects_shell_composition() -> None:
+    for command in ("cat a.md && date", "cat $(whoami)", "cat a.md\\n"):
+        assert "拒绝" in shell.bash(command)
 
 
 # ---------- registry 的错误回传（不崩循环） ----------

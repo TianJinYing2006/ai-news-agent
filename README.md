@@ -21,7 +21,7 @@ decides which tools to call and in what order, without a hardcoded pipeline.*
 - **三道硬闸 + 原子防重**：`max_steps` / token 预算 / 连续重复调用检测，任一触发即失败记录，
   **绝不发"降级简报"**；SQLite `BEGIN IMMEDIATE` 原子认领，同一天并发触发只跑一个。
 - **安全边界**：出网 SSRF 逐跳复查（拒 loopback / 私网 / link-local）、文件路径白名单、
-  受限 `bash`（纯 Python 实现，不启动任意 shell）、Markdown 双重净化（禁原始 HTML + nh3 allowlist）。
+  受限真实 Bash 子进程（命令白名单、仅限 `data/`、无 shell 组合语法、超时和输出上限）、Markdown 双重净化。
 - **可运维**：`--dry-run` 全链路演练（不发信不改状态）、轮转日志与退出码、启动补跑、
   网页可配推送时间与「立即运行一次」。
 - **工程实践**：本仓库真实执行「一需求 = 一分支 = 一 PR = CLI 校验」，共 19 个 PR（含 2 次 release）；CI 全绿。
@@ -75,7 +75,7 @@ flowchart TD
 | 工具顺序由 LLM 决定 | 手写 ReAct 循环；受控假 client 测试钉住"上一步结果影响下一步选择" |
 | 重复触发不重复发信 | `BEGIN IMMEDIATE` 原子认领 + 状态机 + `sent` 终态；SMTP 失败只重发、不重跑模型 |
 | 失败可排查、可重试 | 错误 + 脱敏 trace 存 `agent_runs` 网页可见；`--dry-run` 全链路演练不改状态 |
-| 安全与凭据 | SSRF 逐跳复查、路径白名单、受限 bash、HTML 双重净化；凭据只在本机环境变量 |
+| 安全与凭据 | SSRF 逐跳复查、路径白名单、受限真实 Bash 子进程、HTML 双重净化；凭据只在本机环境变量 |
 | 历史简报浏览 | 归档 `md/html` + 列表/详情页（净化渲染，正文只读文件不入库） |
 
 ## 项目结构
@@ -114,7 +114,7 @@ start.cmd        一键启动（Windows，双击即用）
 |---|---|
 | `list_dir` / `read_file` / `write_file` | 工作区文件读写 |
 | `search_content` | 目录内全文检索，返回**命中片段**而非整篇 |
-| `bash` | 受限命令（`ls/cat/grep/wc/date/head/tail`），不启动任意 shell |
+| `bash` | 受限真实 Bash 子进程（`ls/cat/grep/wc/date/head/tail`），只读访问 `data/` |
 | `fetch_rss` | 抓取 RSS/Atom 源 |
 | `search_web` | Tavily 联网搜索，供模型按需补搜 |
 | `fetch_url` | 抽取网页正文（trafilatura） |
