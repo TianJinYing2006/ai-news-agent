@@ -5,7 +5,8 @@
 核心设计点是**工具调用顺序完全由大模型决定**——不是"先抓完 RSS，再筛选，再总结"的固定流水线，
 而是手写 ReAct 循环：模型发起工具调用、看到真实结果、再决定下一步（继续搜、换源、抓正文、还是结束）。
 
-> 状态：进行中。已完成技术选型、工具层与源清单；存储层、Agent 循环、编排层、前端与调度开发中。
+> 状态：本机 MVP 功能已就绪 —— 存储 / Agent 循环 / 校验渲染 / 发信 / 编排 CLI / 网页三页全部完成，
+> 130 项单测与 Ruff 全绿。剩余：DeepSeek 与 SMTP 凭据联调、Windows 任务计划程序实机注册。
 > 详见下方「当前进度」。
 
 ---
@@ -92,15 +93,28 @@ RSS 源 404、正文是付费墙、今天内容特别少——这些情况下只
 ## 快速开始
 
 ```bash
-python -m venv .venv && ./.venv/Scripts/python.exe -m pip install -e .
-cp .env.example .env      # 填入 DEEPSEEK_API_KEY / TAVILY_API_KEY / SMTP 授权码
+python -m venv .venv && ./.venv/Scripts/python.exe -m pip install -e ".[dev]"
+cp .env.example .env      # 填入 DEEPSEEK_API_KEY / SMTP 授权码（TAVILY_API_KEY 可选）
 
-./.venv/Scripts/python.exe -m pytest -q          # 单测
-./.venv/Scripts/python.exe -m news_agent.run_daily --dry-run
+./.venv/Scripts/python.exe -m pytest -q                        # 单测（离线 mock，不联网）
+./.venv/Scripts/python.exe -m news_agent.run_daily --dry-run   # 真链路演练：不发信、不改状态
+./.venv/Scripts/python.exe -m news_agent.web                   # 网页（仅本机）：http://127.0.0.1:8000
 ```
 
 需要三个凭据，但**都不阻塞代码编写与单测**：DeepSeek API key、Tavily key（可选）、
-QQ 邮箱 SMTP 授权码。
+QQ 邮箱 SMTP 授权码。缺少凭据时运行会给出明确错误，而不是静默降级。
+
+## 每日运行与调度
+
+- 唯一入口 `python -m news_agent.run_daily`：原子认领 → 模型自主选工具 → 简报校验 →
+  归档 `data/briefings/YYYY-MM-DD.md|.html` → SMTP 发送；同一天重复触发会跳过，
+  SMTP 失败后的重跑**只重发邮件、不重跑模型**；
+- 日志写入 `data/logs/news_agent.log`（轮转）；成功退出码 0、失败 1，便于任务计划程序识别；
+- Windows 任务计划程序注册一次（每天 07:00）：
+  - 操作：启动程序 → `<项目路径>\.venv\Scripts\python.exe`；
+  - 参数：`-m news_agent.run_daily`；起始于：项目根目录；
+  - 常规：勾选「使用最高权限运行」可不勾，选「只在用户登录时运行」即可；
+  - 条件：建议勾选「唤醒计算机运行此任务」；设置：勾选「如果错过计划，尽快启动」。
 
 ## 当前进度
 
@@ -109,12 +123,14 @@ QQ 邮箱 SMTP 授权码。
 | 技术选型与实施计划 | ✅ `docs/` |
 | 工具层 9 个 + 15 项单测 | ✅ |
 | RSS 源清单（9 个可用 / 7 个已剔除并记录原因） | ✅ |
-| 存储层（原子认领、状态机、租约回收） | ⏳ |
-| Agent 循环（停止条件、错误回灌、trace） | ⏳ |
-| 简报校验、渲染（Markdown→HTML 净化）、SMTP | ⏳ |
-| 编排层与 CLI | ⏳ |
-| 前端三页（身份 / 订阅 / 历史简报） | ⏳ |
-| 调度与真实服务联调 | ⏳ |
+| 出网安全闸（SSRF 逐跳复查、超时、响应体上限） | ✅ |
+| 存储层（原子认领、状态机、租约回收） | ✅ |
+| Agent 循环（三道硬闸、错误回灌、脱敏 trace） | ✅ |
+| 简报校验、渲染净化、SMTP 发送（重试可配置） | ✅ |
+| 编排层与 CLI（dry-run、轮转日志、退出码） | ✅ |
+| 前端三页（身份 / 订阅 / 历史简报） | ✅ |
+| 全量单测与静态检查（130 项 / Ruff） | ✅ |
+| 调度与真实服务联调 | ⏳ 待凭据（DeepSeek / SMTP）与实机注册 |
 
 ## 文档
 
