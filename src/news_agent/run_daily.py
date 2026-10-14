@@ -376,7 +376,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    _setup_file_logging()
+    setup_file_logging()
     outcome = run_daily(args.date, dry_run=args.dry_run)
     line = f"[{outcome.status}] {outcome.date}：{outcome.message}"
     print(line)
@@ -384,7 +384,8 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if outcome.status in SUCCESS_STATUSES else 1
 
 
-def _setup_file_logging() -> None:
+def setup_file_logging() -> None:
+    """轮转文件日志（`data/logs/news_agent.log`）。CLI 与 web 进程共用。"""
     logger.setLevel(logging.INFO)
     if any(isinstance(h, RotatingFileHandler) for h in logger.handlers):
         return

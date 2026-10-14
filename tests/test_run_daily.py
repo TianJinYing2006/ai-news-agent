@@ -381,7 +381,7 @@ def test_dry_run_requires_key(tmp_path: Path) -> None:
 
 
 def test_main_exit_codes(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(module, "_setup_file_logging", lambda: None)
+    monkeypatch.setattr(module, "setup_file_logging", lambda: None)
 
     monkeypatch.setattr(
         module, "run_daily", lambda date=None, dry_run=False: RunOutcome("sent", DATE, None, "ok")

@@ -14,6 +14,7 @@ dependencies = [
     "tavily-python>=0.5",
     "markdown-it-py>=3.0",   # Markdown → HTML（关闭原始 HTML）
     "nh3>=0.2",              # HTML 净化 allowlist，不用手写 sanitizer
+    "apscheduler>=3.10,<4",  # 进程内调度：随 FastAPI 启动，每日自动运行
 ]
 
 [project.optional-dependencies]

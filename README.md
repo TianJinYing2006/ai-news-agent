@@ -5,8 +5,8 @@
 核心设计点是**工具调用顺序完全由大模型决定**——不是"先抓完 RSS，再筛选，再总结"的固定流水线，
 而是手写 ReAct 循环：模型发起工具调用、看到真实结果、再决定下一步（继续搜、换源、抓正文、还是结束）。
 
-> 状态：本机 MVP 功能已就绪 —— 存储 / Agent 循环 / 校验渲染 / 发信 / 编排 CLI / 网页三页全部完成，
-> 130 项单测与 Ruff 全绿。剩余：DeepSeek 与 SMTP 凭据联调、Windows 任务计划程序实机注册。
+> 状态：本机 MVP 功能已就绪 —— 存储 / Agent 循环 / 校验渲染 / 发信 / 编排 CLI / 网页三页 / 进程内调度全部完成，
+> 141 项单测与 Ruff 全绿。剩余：DeepSeek 与 SMTP 凭据联调与一次真实运行。
 > 详见下方「当前进度」。
 
 ---
@@ -49,7 +49,7 @@
 | 存储 | SQLite（WAL，原子认领 + 陈旧租约回收） |
 | Web | FastAPI + Jinja2，只监听 `127.0.0.1` |
 | 推送 | SMTP（脚本自带） |
-| 调度 | Windows 任务计划程序 |
+| 调度 | APScheduler（进程内，随 FastAPI 启动） |
 
 ## 数据流
 
@@ -98,7 +98,7 @@ cp .env.example .env      # 填入 DEEPSEEK_API_KEY / SMTP 授权码（TAVILY_AP
 
 ./.venv/Scripts/python.exe -m pytest -q                        # 单测（离线 mock，不联网）
 ./.venv/Scripts/python.exe -m news_agent.run_daily --dry-run   # 真链路演练：不发信、不改状态
-./.venv/Scripts/python.exe -m news_agent.web                   # 网页（仅本机）：http://127.0.0.1:8000
+./.venv/Scripts/python.exe -m news_agent.web                   # 网页 + 每日调度（仅本机）：http://127.0.0.1:8000
 ```
 
 需要三个凭据，但**都不阻塞代码编写与单测**：DeepSeek API key、Tavily key（可选）、
@@ -106,15 +106,15 @@ QQ 邮箱 SMTP 授权码。缺少凭据时运行会给出明确错误，而不�
 
 ## 每日运行与调度
 
-- 唯一入口 `python -m news_agent.run_daily`：原子认领 → 模型自主选工具 → 简报校验 →
+- 业务唯一入口是 `python -m news_agent.run_daily`：原子认领 → 模型自主选工具 → 简报校验 →
   归档 `data/briefings/YYYY-MM-DD.md|.html` → SMTP 发送；同一天重复触发会跳过，
   SMTP 失败后的重跑**只重发邮件、不重跑模型**；
-- 日志写入 `data/logs/news_agent.log`（轮转）；成功退出码 0、失败 1，便于任务计划程序识别；
-- Windows 任务计划程序注册一次（每天 07:00）：
-  - 操作：启动程序 → `<项目路径>\.venv\Scripts\python.exe`；
-  - 参数：`-m news_agent.run_daily`；起始于：项目根目录；
-  - 常规：勾选「使用最高权限运行」可不勾，选「只在用户登录时运行」即可；
-  - 条件：建议勾选「唤醒计算机运行此任务」；设置：勾选「如果错过计划，尽快启动」。
+- 自动调度内置于 Web 服务：`python -m news_agent.web` 启动后，APScheduler 每天
+  `DAILY_RUN_AT`（默认 07:00，Asia/Shanghai）自动调用 `run_daily()`
+  - 单进程单 worker、任务不重叠（`max_instances=1`）；SQLite 原子认领兜底防重；
+  - **服务运行期间才会触发**：服务关闭 / 电脑休眠期间错过的任务不自动补跑，手动跑一次 CLI 即可；
+  - 发送时间改 `.env` 的 `DAILY_RUN_AT`（HH:MM）后重启服务生效；不做网页动态修改；
+- 日志写入 `data/logs/news_agent.log`（轮转）；CLI 成功退出码 0、失败 1。
 
 ## 当前进度
 
@@ -129,8 +129,9 @@ QQ 邮箱 SMTP 授权码。缺少凭据时运行会给出明确错误，而不�
 | 简报校验、渲染净化、SMTP 发送（重试可配置） | ✅ |
 | 编排层与 CLI（dry-run、轮转日志、退出码） | ✅ |
 | 前端三页（身份 / 订阅 / 历史简报） | ✅ |
-| 全量单测与静态检查（130 项 / Ruff） | ✅ |
-| 调度与真实服务联调 | ⏳ 待凭据（DeepSeek / SMTP）与实机注册 |
+| 进程内调度（APScheduler，随 web 服务启停） | ✅ |
+| 全量单测与静态检查（141 项 / Ruff） | ✅ |
+| 真实服务联调（DeepSeek / Tavily / SMTP） | ⏳ 待凭据 |
 
 ## 文档
 
