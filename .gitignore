@@ -1,0 +1,16 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+*.pyo
+
+# 工作记忆：含个人信息与内部复盘，不进公开仓库
+.workbuddy/
+
+# 运行产物：正文存文件（见 docs §5.4），不入库
+data/*.db
+data/workspace/
+data/briefings/
+
+.pytest_cache/
+.ruff_cache/

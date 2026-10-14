@@ -1,0 +1,213 @@
+# 每日 AI 新闻助手 —— 实施计划 v1.1
+
+日期：2026-10-14  
+依据：用户需求；技术选择见 `docs/tech-stack-selection.md`
+
+## 1. 目标与范围
+
+实现一个本机运行的每日 AI 新闻简报工具：用户在网页填写身份和订阅偏好；每日任务运行时读取偏好；LLM 通过 function calling 自己选择工具、顺序和调用次数；程序将有效简报存档并通过邮件发送。
+
+### MVP 边界
+
+- 单机、单用户、单份订阅配置；不做注册登录、多租户或公网部署。网页默认只监听 `127.0.0.1`。
+- Python + FastAPI/Jinja2 + SQLite；简报 Markdown/HTML 文件落在 `data/briefings/`。
+- 手写 ReAct 循环。保留需求指定的五个工具，并加入 RSS、网页搜索、正文抓取和结束工具。网络工具给模型能力，不规定它必须按固定顺序调用。
+- 邮件作为推送渠道。邮件发送由 pipeline 在简报通过校验后执行，模型不能自行发送。
+- trace 保存在 SQLite，供排障和验证循环行为；MVP 不接 Langfuse/OTel，不做独立运行轨迹页面。
+- Windows 任务计划程序作为唯一日常调度器；不同时配置 WorkBuddy，避免不必要的双触发路径。
+- 日期按 `Asia/Shanghai` 计算，调度目标为北京时间早上 07:00；日志写入本机轮转文件并在失败时返回非零退出码，便于任务计划程序显示失败。
+
+不承诺任一外部服务故障时仍发送一封内容不可靠的“降级简报”。失败时保留错误和 trace，在网页显示状态；有效简报仍可查看。只有校验通过的简报才发送。
+
+### 设计取舍
+
+| 决策 | 为什么适合当前需求 | 暂不选的方案 |
+|---|---|---|
+| Python | 现有工具、RSS 解析和正文抽取库成熟，能直接复用已完成的工具层；项目重心是 Agent 行为，不是服务端吞吐 | Java 也能实现，但在本项目没有既有 Java 代码或团队约束，改用 Java 只会增加 RSS/抽取实现成本 |
+| 手写 ReAct + OpenAI 兼容 SDK | 核心验收点就是 LLM 看见工具结果后再决定下一步；单循环可直接检查消息历史、停止条件和错误回灌 | LangGraph/LangChain 的状态图、持久化和多 Agent 能力当前用不到；不是不能用，而是没有需求抵消其额外抽象 |
+| RSS + Tavily 搜索 | RSS 提供低成本稳定候选源，Tavily 给模型按需补搜的能力；来源组合和调用次数仍由模型选择 | 纯搜索增加额度依赖且覆盖不稳定；固定抓完所有 RSS 再总结会把流程顺序交给程序，削弱核心要求 |
+| SQLite + 文件归档 | 单机单用户、每天一份，SQLite 足够保存设置、状态和 trace；Markdown/HTML 文件便于网页、邮件和现有文件工具读取 | PostgreSQL 需要单独服务；把全文只放数据库会让文件工具无法检索，数据库也没有带来当前需要的查询能力 |
+| FastAPI + Jinja2 | 身份、订阅、历史是简单表单和阅读页，服务端模板即可完成并直接复用 Python 数据层 | React/Vue 会增加构建、路由和 API 维护工作，当前没有复杂交互来支撑这份成本 |
+| SMTP | 对每天发一封邮件，SMTP 配置量小、可由 Windows 定时任务无人值守调用 | Agent Mail 等需要逐封确认的通道不适合无人值守；暂不引入邮件服务商 API，因为需求没有模板、投递分析或批量发送要求 |
+| 受限 `bash(command)` | 保留需求要求的命令工具，用现有白名单支持常见目录/文本检查；当前命令由 Python 在受限路径内实现，跨平台且不启动任意 shell | `shell=True` 或任意子进程可让模型运行删除、下载、持久化等任意命令；以后若改用 `subprocess`，仍应 `shell=False`、白名单和超时 |
+| 单一 Windows 任务计划程序 | 应用运行在本机，系统调度器足以触发每日 CLI；单入口更容易排查 | 双调度器增加重复触发、凭据和运维问题；APScheduler 要求常驻进程，不适合关机/休眠的桌面环境 |
+| SQLite 精简 trace | 一份本地记录足以查看工具选择和失败原因，也能支撑测试 | Langfuse/OTel 对单机单用户增加服务/配置/敏感数据流转；出现远程团队协作或线上监控需求后再评估 |
+| 本机单用户，不做登录 | 当前需求是一个用户设置自己的订阅，且页面默认只在本机开放；不引入账号系统即可完成目标 | 多用户和公网部署需要认证、授权、隔离及账户恢复，当前没有对应需求，做了反而扩大安全面 |
+
+这些选择不是对未来的限制。如果后续需要多人共享、断点续跑、线上告警或高可用，再依据实际问题引入对应方案。
+
+## 2. 数据流
+
+```text
+用户网页 ──保存──> profile / subscription (SQLite)
+                           │ 每日运行时读取
+                           ▼
+             system prompt + 当日目标 + 可用工具
+                           │
+                           ▼
+             LLM ReAct 循环 <──> 工具执行结果
+                 │ 工具顺序和次数由模型决定
+                 ▼
+           finish(path, summary)
+                 │ 校验路径、文件、内容
+                 ▼
+       保存 Markdown/HTML + run trace
+                 │
+                 ▼
+              SMTP 邮件
+```
+
+程序负责身份/偏好读取、工具安全边界、步数与 token 限额、文件校验、持久化、发信和状态转换。模型负责决定何时调用哪些工具以及何时调用 `finish`。不得在 pipeline 中预先抓完固定 RSS 列表后再让模型只做总结。
+
+## 3. 模块契约
+
+### 3.1 存储
+
+SQLite 使用 WAL、`busy_timeout=10s`，每个操作及时提交并关闭游标。所有写操作用参数化 SQL。
+
+```python
+class Database:
+    def transaction(self): ...  # context manager，支持 BEGIN IMMEDIATE
+    def fetchone(self, sql: str, params: tuple = ()) -> dict | None: ...
+    def fetchall(self, sql: str, params: tuple = ()) -> list[dict]: ...
+    def execute(self, sql: str, params: tuple = ()) -> int: ...
+
+def init_db(db: Database) -> None
+def save_profile(db: Database, name: str, email: str) -> None
+def get_profile(db: Database) -> dict | None
+def save_subscription(db: Database, topics: list[str], keywords: list[str],
+                      exclude_keywords: list[str], max_items: int) -> None
+def get_subscription(db: Database) -> dict
+def claim_daily_run(db: Database, date: str, stale_after_minutes: int = 120) -> str
+def mark_generated(db: Database, date: str, *, md_path: str, html_path: str,
+                   summary: str, item_count: int) -> None
+def mark_sent(db: Database, date: str) -> None
+def mark_failed(db: Database, date: str, stage: str, error: str) -> None
+def insert_run(db: Database, date: str, started_at: str, ended_at: str,
+               status: str, trace: list[dict], error: str | None) -> int
+```
+
+最小表：
+
+- `profile(id=1, name, email, updated_at)`
+- `subscription(id=1, topics_json, keywords_json, exclude_keywords_json, max_items, updated_at)`
+- `briefings(date UNIQUE, status, md_path, html_path, summary, item_count, attempt,
+  started_at, sent_at, failure_stage, error, updated_at)`
+- `agent_runs(id, date, started_at, ended_at, status, steps, tool_calls,
+  tokens_in, tokens_out, trace_json, error)`
+
+不要另建 `articles` 去重表：MVP 只要求在当次素材中按完全相同 URL 去重；跨日是否重复可作为后续改进。用户偏好作为 JSON 数组存储，读写时验证类型和条数上限。
+
+### 3.2 幂等与重试
+
+`claim_daily_run` 必须在一个 `BEGIN IMMEDIATE` 事务中检查并更新当天记录，不能把“先查 sent、稍后再写”当锁。新建行时按日期写入预期的最终 Markdown/HTML 路径，因此生成前状态行也满足路径字段约束：
+
+1. `sent` 返回 `skipped`。
+2. `generating`、`generated` 或 `sending` 且 `started_at` 未超过 120 分钟，返回 `already_running`。
+3. 不存在、模型阶段失败、SMTP 失败但产物缺失/不合格，或已过期的 `generating`，原子地写为 `generating` 并增加 `attempt`，返回 `generate`。
+4. `generated`/`sending` 过期，或 `failure_stage=smtp` 时，若简报文件仍通过校验则原子地写为 `sending` 并增加 `attempt`，返回 `retry_send`；pipeline 复用已有文件，不再次调用 LLM。文件不合格则走 `generate` 分支。
+5. `force` 不属于 MVP 接口。需要重发时先提供明确的人工操作语义，避免误发。
+
+状态转换：`generating → generated → sending → sent`；任一失败写为 `failed` 并保存阶段与错误。重试失败运行时复用当天记录并增加 attempt，不插入违反唯一约束的新简报。SMTP 已接受邮件但客户端未收到成功响应时可能产生重复投递；SMTP 不提供端到端 exactly-once 保证，状态记录只能减少重复，不能消除此边界。
+
+### 3.3 Agent 与工具
+
+```python
+@dataclass
+class AgentResult:
+    status: str  # finished | max_steps_exceeded | token_budget_exceeded |
+                 # loop_detected | incomplete | error
+    steps: int
+    tool_call_count: int
+    tokens_in: int
+    tokens_out: int
+    trace: list[dict]
+    briefing_path: Path | None
+    summary: str | None
+
+def run_agent(client, *, system_prompt: str, user_prompt: str,
+              tools_schema: list[dict], registry: ToolRegistry,
+              model: str, max_steps: int, token_budget: int,
+              loop_window: int) -> AgentResult
+```
+
+工具：`list_dir`、`read_file`、`search_content`、`write_file`、`bash`、`fetch_rss`、`search_web`、`fetch_url`、`finish`。`bash` 必须维持现有命令白名单、禁止 shell 拼接/管道/重定向，并限制工作目录；文件工具必须做路径包含校验。LLM 与 SMTP key 缺失时，在真正调用对应服务时返回可读错误，不影响其余模块的单测。
+
+循环规则：
+
+- 每轮将完整 assistant 响应追加到消息历史；DeepSeek thinking 模式需保留并回传 `reasoning_content`。不要手工重建 assistant 消息。
+- assistant 返回 tool calls 时，逐个执行并把 `tool_call_id` 对应的结果加回历史；参数解析或工具错误作为工具结果交给模型处理。
+- `finish` 必须是该轮唯一的 tool call；若与其它调用混在同一响应中，向模型返回格式错误并要求重新决定，避免一边结束、一边还有未处理动作。
+- `finish` 是唯一成功出口。模型不再请求工具但没有调用 `finish`，返回 `incomplete`，不能当成简报成功。
+- 设置 `max_steps=30`、token 预算和重复调用检测作为成本/故障保护。任一硬限制触发时停止并记录失败，不发送空白或编造的降级简报。
+- trace 记录时间、工具名、脱敏后的参数、结果摘要、usage 和停止原因；不得记录 API key、SMTP 凭据或完整私密正文。原始 `reasoning_content` 不持久化到 UI/trace。
+- 网络请求设连接/总超时和响应体大小上限，并拒绝 loopback、私网、link-local 等目标地址；每次跳转后重新检查地址，降低 SSRF 风险。网页搜索工具只访问配置的服务端点。
+
+简报采用固定的轻量 Markdown 形状，便于校验和渲染：顶层标题；每条新闻用二级标题，包含来源/日期、摘要和原始 URL；当天没有符合条件的内容时，明确写“暂无符合订阅的新闻”，不能为凑数编造。`finish` 后 pipeline 验证路径位于当日工作区内、文件存在且非空、标题和每条新闻链接完整、条数不超过上限；允许合法的零条简报。验证通过后复制/原子写入 `data/briefings/YYYY-MM-DD.md` 和 HTML，再进入 `generated`。不接受模型提供的工作区外路径。用 `markdown-it-py` 关闭原始 HTML，再用 `nh3` allowlist 净化链接和标签；模型输出是外部内容，不能直接返回浏览器，也不应自己手写不完整的 HTML sanitizer。
+
+### 3.4 提示词
+
+系统提示只说明目标、订阅偏好、可用 RSS 源、时效/引用要求和安全约束。明确允许模型自行决定工具顺序、调用次数和是否需要网页搜索；不要写成“先抓所有 RSS，再筛选，再抓正文”的固定工作流。
+
+每条新闻必须有原始 URL；不能确认发布日期时标注不确定或不选；按 `exclude_keywords` 排除；尽量覆盖偏好话题；同一份简报内相同 URL 只保留一次。阶段性进展可以作为后续增强，但不能要求每次都搜索历史简报。
+
+### 3.5 Pipeline、邮件与页面
+
+```python
+@dataclass
+class RunOutcome:
+    status: str  # sent | skipped | already_running | failed
+    date: str
+    briefing_path: Path | None
+    message: str
+
+def run_daily(date: str | None = None) -> RunOutcome
+```
+
+`run_daily` 是 CLI、定时任务和任何手动触发入口共用的唯一入口。未显式传入日期时按 `Asia/Shanghai` 取当天。流程为：检查必要配置和 profile/subscription → 原子 claim → 若返回 `generate` 则调 Agent、校验并保存；若返回 `retry_send` 则重校验现有文件 → SMTP 发送 → 更新状态并保存 trace。异常路径必须 `mark_failed`，不能留下永久占用的运行状态。
+
+邮件使用 SMTP SSL/STARTTLS 配置；身份页填写的邮箱是收件人，SMTP 用户/授权码是发件通道凭据，不混为一个字段。发送能力不暴露成 Agent 工具。重试次数和间隔配置化；SMTP 未配置时标记 `failed`，网页仍可查看已生成简报。Web 页面只做三项：身份设置、订阅设置、历史简报列表/详情。运行状态可在历史列表展示；不实现单独 trace 页面、分页 API、WebSocket 或公网鉴权体系。
+
+## 4. 实施阶段与验收
+
+阶段 1：补齐存储模型与迁移/初始化，测试默认值、唯一日期、状态转换、重复初始化、两个并发 claim 只有一个成功，以及超时运行可回收。
+
+阶段 2：完善配置和提示词，测试订阅/排除词被注入、RSS 清单可用、提示没有规定工具执行顺序、缺少 key 不阻塞导入和测试。
+
+阶段 3：完成 Agent 循环，使用假 client 覆盖 `finish`、无 finish、工具错误回灌、连续重复工具、步数上限、token 上限、reasoning 字段保留和多 tool calls。核心分支测试必须可重复，不依赖真实模型连续几天产生不同轨迹。
+
+阶段 4：完成简报校验、Markdown/HTML 渲染、SMTP 错误处理与可 mock 的重试；验证路径穿越、空简报、缺少 URL 均不能进入发送阶段。
+
+阶段 5：完成 pipeline/CLI，mock Agent 和 SMTP 验证成功、重复运行跳过、失败后重跑、并发启动只允许一个运行、生成失败不发信、邮件失败仍保留网页简报，且 SMTP 失败重跑只复用简报、不再次调用 Agent。
+
+阶段 6：完成三个页面，用 FastAPI TestClient 验证表单写库、偏好回读、历史列表/详情和失败状态展示。
+
+阶段 7：配置一个 Windows 任务计划程序任务，指定当前用户、venv Python、模块入口和工作目录；按设备情况开启“唤醒计算机运行此任务”和错过计划后尽快运行。手动运行一次，再用短间隔测试任务验证日志/退出码；最后改为每天早上运行。真实 DeepSeek、Tavily 和 SMTP 联调分别记录结果。
+
+常用验证：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\ruff.exe check .
+.\.venv\Scripts\python.exe -m news_agent.run_daily --date 2026-10-14 --dry-run
+```
+
+`--dry-run` 使用临时工作区走真实提示词、Agent 和产物校验，不发邮件也不改当天正式状态；若没有 LLM key，应在启动前给出清楚错误。包需先安装到 venv（例如 `pip install -e .`），调度器通过 `-m news_agent.run_daily` 启动，不直接执行 `src/news_agent/run_daily.py`。网络调用均有超时，总运行时限小于陈旧 claim 的 120 分钟租期，避免租约过期时旧进程仍继续发送。
+
+## 5. 完成标准
+
+- 页面可保存身份与订阅偏好；次次运行都从 SQLite 读取最新值。
+- 每日运行能从候选 RSS/网络中由模型自主选工具，生成可查看的历史简报并发送邮件。
+- 日志/trace 能还原每步工具名、结果摘要和停止原因；受控测试证明工具返回结果会影响后续模型工具选择。
+- 同一日期重复触发不会并发生成或重复正常发送；失败状态可见且可重试。
+- `pytest`、Ruff 检查通过；真实服务联调单独记录，不把“等待三天看轨迹变化”作为核心要求验收。
+
+成本在完成至少 3 次真实运行后按 API usage 汇总每日报告，再估算月成本。方案阶段的 token 估算只作为预算上限，不宣称固定月费或充值可运行时长。
+
+## 6. 外部配置
+
+- DeepSeek API key：真实 Agent 联调。
+- Tavily key：联网搜索；缺失时 RSS 和其他无 key 工具仍可运行。
+- SMTP 授权码：真实邮件发送。
+
+以上凭据均通过 `.env` 配置并加入 `.gitignore`，不得写入 SQLite、trace 或日志。
