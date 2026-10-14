@@ -5,6 +5,9 @@
 设计要点：**失败要说得清楚**。返回给模型的错误文本必须包含"发生了什么 + 建议怎么办"，
 模型才能据此换源或改策略——这正是闭环相对开环的价值（docs §5.1）。
 比如 fetch_url 抽不到正文时，要明确提示"疑似付费墙或 JS 渲染"，而不是抛个异常。
+
+出网统一经 `netguard`：SSRF 地址检查、逐跳复查重定向、超时与响应体上限
+都在那里实现（URL 由模型提供，属于不可信输入）。
 """
 
 from __future__ import annotations
@@ -13,14 +16,11 @@ import re
 from functools import lru_cache
 
 import feedparser
-import httpx
 import trafilatura
 from tavily import TavilyClient
 
 from ..config import Config
-
-UA = "Mozilla/5.0 (compatible; NewsAgent/0.1; +https://github.com/)"
-TIMEOUT = 20.0
+from . import netguard
 
 # 正文短于这个长度，判定为抓取失败（付费墙 / JS 渲染 / 反爬）
 MIN_BODY_CHARS = 200
@@ -32,24 +32,6 @@ def _cfg() -> Config:
     return Config.load()
 
 
-@lru_cache(maxsize=1)
-def _client() -> httpx.Client:
-    """共享 HTTP 客户端。
-
-    ⚠️ `trust_env=False` 是实测得出的关键配置，不是随手写的：
-    本机代理（58928）对本项目**所有**目标站点都不通
-    （DeepSeek 走代理 000、Tavily 走代理 000、国外源 000），
-    而直连全部可达（DeepSeek 401=通、Tavily 200、国内源 200）。
-    若沿用环境变量代理，所有联网工具会集体失败。见 docs §2。
-    """
-    return httpx.Client(
-        trust_env=False,
-        timeout=TIMEOUT,
-        follow_redirects=True,
-        headers={"User-Agent": UA},
-    )
-
-
 def fetch_rss(feed_url: str, limit: int = 20) -> str:
     """抓取 RSS/Atom 源，返回条目列表。
 
@@ -57,17 +39,20 @@ def fetch_rss(feed_url: str, limit: int = 20) -> str:
     必须显式检查这两种情况，否则模型会以为"这个源今天没更新"。
     """
     limit = max(1, min(int(limit), 50))
-    try:
-        resp = _client().get(feed_url)
-        resp.raise_for_status()
-    except Exception as e:  # noqa: BLE001
+    outcome = netguard.fetch(feed_url)
+    if outcome.error:
         return (
             f"[抓取失败] {feed_url}\n"
-            f"原因：{type(e).__name__}: {e}\n"
+            f"原因：{outcome.error}\n"
             "建议：换一个 RSS 源，或改用 search_web 搜索该话题。"
         )
+    if outcome.truncated:
+        return (
+            f"[抓取失败] {feed_url} 的响应体超过大小上限，疑似异常源。\n"
+            "建议：换源。"
+        )
 
-    feed = feedparser.parse(resp.text)
+    feed = feedparser.parse(outcome.text)
     if getattr(feed, "bozo", 0) and not feed.entries:
         return (
             f"[解析失败] {feed_url} 返回的不是可解析的 RSS/Atom。"
@@ -130,17 +115,15 @@ def fetch_url(url: str) -> str:
     if not url.startswith(("http://", "https://")):
         return f"[错误] URL 必须以 http:// 或 https:// 开头，收到：{url!r}"
 
-    try:
-        resp = _client().get(url)
-        resp.raise_for_status()
-    except Exception as e:  # noqa: BLE001
+    outcome = netguard.fetch(url)
+    if outcome.error:
         return (
             f"[抓取失败] {url}\n"
-            f"原因：{type(e).__name__}: {e}\n"
+            f"原因：{outcome.error}\n"
             "建议：改用 RSS 摘要，或换一篇来源。"
         )
 
-    text = trafilatura.extract(resp.text, include_comments=False, include_tables=False) or ""
+    text = trafilatura.extract(outcome.text, include_comments=False, include_tables=False) or ""
 
     if len(text.strip()) < MIN_BODY_CHARS:
         return (
@@ -152,9 +135,10 @@ def fetch_url(url: str) -> str:
 
     body = text.strip()
     clipped = len(body) > MAX_BODY_CHARS
-    return (
-        f"正文（来自 {url}）：\n" + body[:MAX_BODY_CHARS] + ("\n...(已截断)" if clipped else "")
-    )
+    note = "\n...(已截断)" if clipped else ""
+    if outcome.truncated:
+        note += "\n...(响应体超过上限，已截断读取)"
+    return f"正文（来自 {url}）：\n" + body[:MAX_BODY_CHARS] + note
 
 
 def _clean(html: str) -> str:
