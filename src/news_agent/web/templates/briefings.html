@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}历史简报 · 每日 AI 简报{% endblock %}
+{% block heading %}历史简报{% endblock %}
+{% block content %}
+{% if briefings %}
+<table>
+  <tr>
+    <th>日期</th><th>状态</th><th>条数</th><th>摘要</th><th>备注</th>
+  </tr>
+  {% for b in briefings %}
+  <tr>
+    <td><a href="/briefings/{{ b.date }}">{{ b.date }}</a></td>
+    <td><span class="status-{{ b.status }}">{{ b.status }}</span></td>
+    <td>{{ b.item_count if b.item_count is not none else '—' }}</td>
+    <td>{{ b.summary or '' }}</td>
+    <td class="muted">{{ b.error or '' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">还没有运行记录。每日任务运行一次后，这里会显示简报。</p>
+{% endif %}
+{% endblock %}

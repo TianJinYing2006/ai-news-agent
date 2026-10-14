@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}{{ date }} · 每日 AI 简报{% endblock %}
+{% block heading %}{{ date }}{% endblock %}
+{% block content %}
+<p class="muted">
+  状态：<span class="status-{{ row.status }}">{{ row.status }}</span>
+  {% if row.sent_at %}· 发送于 {{ row.sent_at }}{% endif %}
+  {% if row.attempt and row.attempt > 1 %}· 第 {{ row.attempt }} 次尝试{% endif %}
+</p>
+{% if row.error %}<p class="error">运行错误：{{ row.error }}</p>{% endif %}
+
+{% if body_html %}
+{# body_html 已由 briefing.render_body_html 净化（markdown-it 关原始 HTML + nh3 allowlist） #}
+<article class="briefing card">{{ body_html | safe }}</article>
+{% else %}
+<p class="muted">当天没有可查看的简报正文{{ '（生成或校验失败）' if row.status == 'failed' else '' }}。</p>
+{% endif %}
+{% endblock %}

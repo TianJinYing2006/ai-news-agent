@@ -100,6 +100,7 @@ def save_subscription(db: Database, topics: list[str], keywords: list[str],
                       exclude_keywords: list[str], max_items: int) -> None
 def get_subscription(db: Database) -> dict
 def get_briefing(db: Database, date: str) -> dict | None
+def list_briefings(db: Database, limit: int = 30) -> list[dict]
 def claim_daily_run(db: Database, date: str, stale_after_minutes: int = 120) -> str
 def mark_generated(db: Database, date: str, *, md_path: str, html_path: str,
                    summary: str, item_count: int) -> None

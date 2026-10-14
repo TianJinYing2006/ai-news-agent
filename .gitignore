@@ -8,9 +8,10 @@ __pycache__/
 .workbuddy/
 
 # 运行产物：正文存文件（见 docs §5.4），不入库
-data/*.db
+data/*.db*
 data/workspace/
 data/briefings/
+data/logs/
 
 .pytest_cache/
 .ruff_cache/

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}每日 AI 简报{% endblock %}</title>
+<style>
+  body { font-family: system-ui, "Microsoft YaHei", sans-serif; max-width: 860px;
+         margin: 2rem auto; padding: 0 1rem; color: #222; line-height: 1.6; }
+  nav { border-bottom: 1px solid #eee; padding-bottom: .6rem; margin-bottom: 1.2rem; }
+  nav a { margin-right: 1rem; color: #06c; text-decoration: none; }
+  nav a:hover { text-decoration: underline; }
+  .card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 1rem 1.25rem; }
+  .muted { color: #777; font-size: .9em; }
+  .error { color: #b00020; }
+  .ok { color: #0a7f3f; }
+  .status-sent { color: #0a7f3f; }
+  .status-failed { color: #b00020; }
+  .status-generating, .status-generated, .status-sending { color: #a06000; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border-bottom: 1px solid #eee; padding: .45rem .5rem; text-align: left;
+           vertical-align: top; font-size: .95rem; }
+  input[type=text], input[type=email], input[type=number] { width: 100%; padding: .4rem;
+           box-sizing: border-box; }
+  textarea { width: 100%; min-height: 5.5rem; padding: .4rem; box-sizing: border-box; }
+  button { padding: .45rem 1.2rem; cursor: pointer; }
+  .briefing h1 { font-size: 1.35rem; }
+  .briefing h2 { font-size: 1.1rem; margin-top: 1.3rem; }
+</style>
+</head>
+<body>
+<nav>
+  <a href="/profile">身份设置</a>
+  <a href="/subscription">订阅设置</a>
+  <a href="/briefings">历史简报</a>
+</nav>
+<h1>{% block heading %}{% endblock %}</h1>
+{% block content %}{% endblock %}
+</body>
+</html>
