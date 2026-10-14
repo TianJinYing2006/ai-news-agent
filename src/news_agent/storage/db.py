@@ -34,8 +34,12 @@ MAX_ITEM_CHARS = 80
 MAX_NAME_CHARS = 100
 MAX_SUMMARY_CHARS = 2000
 MAX_ERROR_CHARS = 2000
+MAX_SETTING_VALUE_CHARS = 200
 
 FAILURE_STAGE_SMTP = "smtp"
+
+# 网页可改的运行设置（存 SQLite，避免写环境变量或文件）
+SETTING_DAILY_RUN_AT = "daily_run_at"
 
 CLAIM_SKIPPED = "skipped"
 CLAIM_ALREADY_RUNNING = "already_running"
@@ -97,6 +101,13 @@ _SCHEMA: tuple[str, ...] = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_agent_runs_date ON agent_runs(date)",
+    """
+    CREATE TABLE IF NOT EXISTS settings (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
 )
 
 
@@ -257,6 +268,35 @@ def get_subscription(db: Database) -> dict:
         "max_items": row["max_items"],
         "updated_at": row["updated_at"],
     }
+
+
+# ---------------------------------------------------------------------------
+# 运行设置（键值对）
+# ---------------------------------------------------------------------------
+
+
+def get_setting(db: Database, key: str) -> str | None:
+    """读取一个设置项；不存在返回 None。"""
+    row = db.fetchone("SELECT value FROM settings WHERE key = ?", (key,))
+    return row["value"] if row else None
+
+
+def set_setting(db: Database, key: str, value: str) -> None:
+    """写入/覆盖一个设置项（如 `daily_run_at`）。"""
+    key = (key or "").strip()
+    value = (value or "").strip()
+    if not key:
+        raise ValueError("设置键不能为空")
+    if not value:
+        raise ValueError("设置值不能为空")
+    if len(value) > MAX_SETTING_VALUE_CHARS:
+        raise ValueError(f"设置值过长（超过 {MAX_SETTING_VALUE_CHARS} 字符）")
+
+    db.execute(
+        "INSERT INTO settings(key, value, updated_at) VALUES(?, ?, ?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        (key, value, _now_iso()),
+    )
 
 
 # ---------------------------------------------------------------------------

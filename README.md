@@ -113,11 +113,12 @@ python -m venv .venv && ./.venv/Scripts/python.exe -m pip install -e ".[dev]"
 - 业务唯一入口是 `python -m news_agent.run_daily`：原子认领 → 模型自主选工具 → 简报校验 →
   归档 `data/briefings/YYYY-MM-DD.md|.html` → SMTP 发送；同一天重复触发会跳过，
   SMTP 失败后的重跑**只重发邮件、不重跑模型**；
-- 自动调度内置于 Web 服务：`python -m news_agent.web` 启动后，APScheduler 每天
-  `DAILY_RUN_AT`（默认 07:00，Asia/Shanghai）自动调用 `run_daily()`
+- 自动调度内置于 Web 服务：`python -m news_agent.web` 启动后，APScheduler 每天按推送时间自动调用 `run_daily()`
+  - **推送时间**：默认 `.env` 的 `DAILY_RUN_AT`（07:00，Asia/Shanghai）；可在网页「历史简报」页修改
+    （存 SQLite、保存即生效、优先于环境默认值）；
+  - **启动补跑**：服务启动时若当天已过推送时间且未发送，立即补跑一次；**更早日期不补发**（错过很久就手动跑一次 CLI）；
+  - **立即运行**：「历史简报」页按钮，后台排队执行；当天已发送 / 运行中会自动跳过（防重不变）；
   - 单进程单 worker、任务不重叠（`max_instances=1`）；SQLite 原子认领兜底防重；
-  - **服务运行期间才会触发**：服务关闭 / 电脑休眠期间错过的任务不自动补跑，手动跑一次 CLI 即可；
-  - 发送时间改 `.env` 的 `DAILY_RUN_AT`（HH:MM）后重启服务生效；不做网页动态修改；
 - 日志写入 `data/logs/news_agent.log`（轮转）；CLI 成功退出码 0、失败 1。
 
 ## 当前进度
@@ -133,7 +134,7 @@ python -m venv .venv && ./.venv/Scripts/python.exe -m pip install -e ".[dev]"
 | 简报校验、渲染净化、SMTP 发送（重试可配置） | ✅ |
 | 编排层与 CLI（dry-run、轮转日志、退出码） | ✅ |
 | 前端三页（身份 / 订阅 / 历史简报） | ✅ |
-| 进程内调度（APScheduler，随 web 服务启停） | ✅ |
+| 进程内调度（APScheduler：启动补跑 / 网页可配时间 / 手动触发 / 查看入口） | ✅ |
 | 全量单测与静态检查（141 项 / Ruff） | ✅ |
 | 真实服务联调与首次正式投递 | ✅ 2026-10-14：tool-calling 两轮、SMTP 登录、dry-run（10 条/14 步）、正式投递（10 条/17 步/33 次工具调用，1 次尝试成功） |
 
