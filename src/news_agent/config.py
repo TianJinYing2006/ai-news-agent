@@ -40,6 +40,8 @@ class SMTPConfig:
     user: str
     password: str
     from_name: str
+    retries: int = 2
+    retry_delay: float = 5.0
     # 注意：收件人不在配置里 —— 取自网页身份设置的 profile.email（见实施计划 §3.5），
     # 避免在 .env 和网页两处各维护一份导致不一致。
 
@@ -71,6 +73,8 @@ class Config:
                 user=os.getenv("SMTP_USER", ""),
                 password=os.getenv("SMTP_PASS", ""),
                 from_name=os.getenv("MAIL_FROM_NAME", "每日 AI 简报"),
+                retries=int(os.getenv("SMTP_RETRIES", "2")),
+                retry_delay=float(os.getenv("SMTP_RETRY_DELAY", "5")),
             ),
         )
 
