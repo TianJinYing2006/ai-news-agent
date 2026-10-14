@@ -32,7 +32,7 @@ CLI 校验命令（PR 前必跑，全绿才可提 PR）：
 3. **三道硬闸**：`max_steps=30`、`token_budget=800000`、连续重复调用检测；任一触发即失败并记录，**不发降级/编造简报**。
 4. **只有校验通过的简报才发送**；失败保留错误与 trace，网页可见。
 5. **MVP 明确不做**（勿加回）：Langfuse/OTel、双调度器并存（调度只保留 APScheduler 进程内一种）、独立 trace 页、跨日去重表、网页手动触发、`force` 参数、分页 API、WebSocket、公网鉴权/多用户登录。
-6. **凭据只在本机 `.env`**（已 gitignore）：不得写入代码、SQLite、trace、日志、文档或提交。
+6. **凭据只在本机环境变量**（Windows 用户级变量优先；项目 `.env` 为可选兜底且已 gitignore）：不得写入代码、SQLite、trace、日志、文档或提交。
 7. 日期口径 `Asia/Shanghai`；网页只监听 `127.0.0.1`。
 8. 破坏性/外部操作（删除、发信、force push、改远程状态）先说明再执行；需求梳理阶段只改文档不写代码。
 
@@ -42,7 +42,7 @@ CLI 校验命令（PR 前必跑，全绿才可提 PR）：
 - **联网一律直连**（`trust_env=False`）：本机代理对所有目标站点不通；抓源必须带 User-Agent。
 - DeepSeek `deepseek-flash`：thinking 模式带 tools 时必须回传 `reasoning_content`，不要手工重建 assistant 消息。
 - 国外 RSS 源不可达；源清单见 `src/news_agent/sources/feeds.py`（9 个国内源实测可用）。
-- 凭据状态：未配置 DeepSeek key / SMTP 授权码前，真实生成与投递属于未完成项；Tavily 可选。
+- 凭据状态：已用 Windows 用户级环境变量配置（DeepSeek / SMTP / Tavily，2026-10-14）；真实联调记录：tool-calling 两轮自检、SMTP 登录认证、dry-run（10 条/14 步）；正式投递待一次真实运行。
 - PyPI 直连慢，可临时用 `-i https://pypi.tuna.tsinghua.edu.cn/simple`。
 
 ## 关键路径
