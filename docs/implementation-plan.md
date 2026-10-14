@@ -148,6 +148,7 @@ class AgentResult:
     trace: list[dict]
     briefing_path: Path | None
     summary: str | None
+    error: str | None
 
 def run_agent(client, *, system_prompt: str, user_prompt: str,
               tools_schema: list[dict], registry: ToolRegistry,
