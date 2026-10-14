@@ -115,7 +115,9 @@ class Database:
     ) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.path, timeout=10.0)
+        # check_same_thread=False：Web（uvicorn/TestClient 线程池）与 CLI 会跨线程使用同一连接；
+        # sqlite3 模块是 serialized 线程模式，连接级并发由 sqlite 串行化，写事务仍走 BEGIN IMMEDIATE。
+        self.conn = sqlite3.connect(self.path, timeout=10.0, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.isolation_level = None
         self.conn.execute("PRAGMA journal_mode=WAL")
@@ -445,6 +447,16 @@ def get_briefing(db: Database, date: str) -> dict | None:
     """读取当天简报记录（pipeline 与网页历史页使用）。"""
     _validate_date(date)
     return db.fetchone("SELECT * FROM briefings WHERE date = ?", (date,))
+
+
+def list_briefings(db: Database, limit: int = 30) -> list[dict]:
+    """按日期倒序列出简报记录（网页历史页使用，不返回正文——正文在文件里）。"""
+    limit = max(1, min(int(limit), 200))
+    return db.fetchall(
+        "SELECT date, status, summary, item_count, attempt, sent_at, failure_stage, error,"
+        " updated_at FROM briefings ORDER BY date DESC LIMIT ?",
+        (limit,),
+    )
 
 
 # ---------------------------------------------------------------------------
