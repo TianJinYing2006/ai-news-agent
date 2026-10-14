@@ -259,4 +259,4 @@ def run_daily(date: str | None = None, *, dry_run: bool = False,
 - Tavily key：联网搜索；缺失时 RSS 和其他无 key 工具仍可运行。
 - SMTP 授权码：真实邮件发送。
 
-以上凭据均通过 `.env` 配置并加入 `.gitignore`，不得写入 SQLite、trace 或日志。
+以上凭据通过本机环境变量配置——Windows 用户级环境变量优先（`setx` 或系统设置），项目 `.env` 可作兜底（已 gitignore；系统环境变量优先级更高）。不得写入 SQLite、trace 或日志。

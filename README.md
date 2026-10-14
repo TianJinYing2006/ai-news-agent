@@ -6,7 +6,7 @@
 而是手写 ReAct 循环：模型发起工具调用、看到真实结果、再决定下一步（继续搜、换源、抓正文、还是结束）。
 
 > 状态：本机 MVP 功能已就绪 —— 存储 / Agent 循环 / 校验渲染 / 发信 / 编排 CLI / 网页三页 / 进程内调度全部完成，
-> 141 项单测与 Ruff 全绿。剩余：DeepSeek 与 SMTP 凭据联调与一次真实运行。
+> 141 项单测与 Ruff 全绿；真实凭据联调已完成 tool-calling / SMTP 登录 / dry-run。剩余：一次正式投递。
 > 详见下方「当前进度」。
 
 ---
@@ -94,15 +94,20 @@ RSS 源 404、正文是付费墙、今天内容特别少——这些情况下只
 
 ```bash
 python -m venv .venv && ./.venv/Scripts/python.exe -m pip install -e ".[dev]"
-cp .env.example .env      # 填入 DEEPSEEK_API_KEY / SMTP 授权码（TAVILY_API_KEY 可选）
+
+# 凭据二选一（系统环境变量优先；都不阻塞代码编写与单测）：
+#   A) Windows 用户级环境变量（推荐）：setx DEEPSEEK_API_KEY "..." 等
+#   B) 项目 .env 兜底（已 gitignore）：cp .env.example .env 后填入
 
 ./.venv/Scripts/python.exe -m pytest -q                        # 单测（离线 mock，不联网）
 ./.venv/Scripts/python.exe -m news_agent.run_daily --dry-run   # 真链路演练：不发信、不改状态
 ./.venv/Scripts/python.exe -m news_agent.web                   # 网页 + 每日调度（仅本机）：http://127.0.0.1:8000
 ```
 
-需要三个凭据，但**都不阻塞代码编写与单测**：DeepSeek API key、Tavily key（可选）、
-QQ 邮箱 SMTP 授权码。缺少凭据时运行会给出明确错误，而不是静默降级。
+需要三个凭据：DeepSeek API key、Tavily key（可选）、QQ 邮箱 SMTP 授权码。
+推荐用 `setx` 写入用户级环境变量（`DEEPSEEK_API_KEY` / `SMTP_USER` / `SMTP_PASS`，
+可选 `TAVILY_API_KEY`）；缺少凭据时运行会给出明确错误，而不是静默降级。
+收件邮箱不在环境变量里——在网页「身份」页填写。
 
 ## 每日运行与调度
 
@@ -131,7 +136,7 @@ QQ 邮箱 SMTP 授权码。缺少凭据时运行会给出明确错误，而不�
 | 前端三页（身份 / 订阅 / 历史简报） | ✅ |
 | 进程内调度（APScheduler，随 web 服务启停） | ✅ |
 | 全量单测与静态检查（141 项 / Ruff） | ✅ |
-| 真实服务联调（DeepSeek / Tavily / SMTP） | ⏳ 待凭据 |
+| 真实服务联调 | ✅ 凭据自检（tool-calling 两轮 + SMTP 登录）、dry-run 10 条/14 步；⏳ 待一次正式投递 |
 
 ## 文档
 
