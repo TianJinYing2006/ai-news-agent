@@ -99,8 +99,9 @@ def build_registry() -> ToolRegistry:
         Tool(
             name="bash",
             description=(
-                "执行受限的 shell 命令。仅允许 ls/cat/grep/wc/date/head/tail，"
-                "且禁止管道、重定向与命令拼接。用于快速查看与统计文件。"
+                "通过真实 Bash 子进程执行受限命令。仅允许 ls/cat/grep/wc/date/head/tail；"
+                "文件参数限于 data/，禁止管道、重定向、命令替换和命令拼接。"
+                "用于快速查看与统计工作区文件。"
             ),
             parameters={
                 "type": "object",

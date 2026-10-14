@@ -29,7 +29,7 @@
 | SQLite + 文件归档 | 单机单用户、每天一份，SQLite 足够保存设置、状态和 trace；Markdown/HTML 文件便于网页、邮件和现有文件工具读取 | PostgreSQL 需要单独服务；把全文只放数据库会让文件工具无法检索，数据库也没有带来当前需要的查询能力 |
 | FastAPI + Jinja2 | 身份、订阅、历史是简单表单和阅读页，服务端模板即可完成并直接复用 Python 数据层 | React/Vue 会增加构建、路由和 API 维护工作，当前没有复杂交互来支撑这份成本 |
 | SMTP | 对每天发一封邮件，SMTP 配置量小、可由进程内调度无人值守调用 | Agent Mail 等需要逐封确认的通道不适合无人值守；暂不引入邮件服务商 API，因为需求没有模板、投递分析或批量发送要求 |
-| 受限 `bash(command)` | 保留需求要求的命令工具，用现有白名单支持常见目录/文本检查；当前命令由 Python 在受限路径内实现，跨平台且不启动任意 shell | `shell=True` 或任意子进程可让模型运行删除、下载、持久化等任意命令；以后若改用 `subprocess`，仍应 `shell=False`、白名单和超时 |
+| 受限真实 `bash(command)` | 保留需求要求的命令工具；通过 Bash 子进程执行 `ls/cat/grep/wc/date/head/tail`，文件参数限制在 `data/`，限制参数、时间和输出 | 任意命令或任意 shell 语法会让模型获得过大权限；不需要为新闻整理开放写入、网络、管道和命令拼接能力 |
 | APScheduler（随 FastAPI 启动） | 交付与演示只有一个启动入口——web 服务自带调度，免操作系统配置；任务复用统一 `run_daily()`；网页可改推送时间、可手动触发；单实例不重叠 + SQLite 原子认领双重防重 | Windows 任务计划程序：逐机手工配置、演示不便；双调度器：重复触发风险。历史日期不补发（当天启动补跑，README 说明） |
 | SQLite 精简 trace | 一份本地记录足以查看工具选择和失败原因，也能支撑测试 | Langfuse/OTel 对单机单用户增加服务/配置/敏感数据流转；出现远程团队协作或线上监控需求后再评估 |
 | 本机单用户，不做登录 | 当前需求是一个用户设置自己的订阅，且页面默认只在本机开放；不引入账号系统即可完成目标 | 多用户和公网部署需要认证、授权、隔离及账户恢复，当前没有对应需求，做了反而扩大安全面 |
@@ -45,7 +45,7 @@
 | Agent 编排 | 手写 ReAct / function-calling 循环，OpenAI Python SDK | 直接处理模型消息、工具调用、结果回传和停止条件，便于验证模型决定工具顺序 | LangGraph/LangChain：能力足够但当前不用状态图、断点恢复或多 Agent；并非不满足需求 |
 | 模型 | DeepSeek `deepseek-flash`，OpenAI 兼容 API | 已有原生 tool calling，能复用 SDK；配置保留 base URL 和模型名 | 为单模型 MVP 再引入多模型路由或 LangChain 模型适配层 |
 | 新闻获取 | `feedparser` 读取 RSS/Atom；Tavily Python SDK 按需搜索；`httpx` 访问网页；`trafilatura` 抽正文 | RSS 无 key、适合作主源；Tavily 补充模型自主搜索；分层工具可让模型按需选择来源 | 纯搜索：额度和覆盖不稳定；固定抓取全部源：会把流程顺序写死 |
-| 工具安全 | 项目内 `ToolRegistry`；文件路径限制；受限 `bash` 白名单；HTTP 超时、SSRF 地址/跳转复查、响应体上限 | 工具执行仍由模型选择，但参数与副作用由程序设边界；bash 不启动任意 shell | 任意 shell、开放式 URL 抓取或把发邮件暴露给模型 |
+| 工具安全 | 项目内 `ToolRegistry`；文件路径限制；白名单 Bash 子进程；HTTP 超时、SSRF 地址/跳转复查、响应体上限 | 工具执行仍由模型选择，但参数与副作用由程序设边界；Bash 仅执行只读命令，参数限制在 `data/` | 任意 shell 语法、开放式 URL 抓取或把发邮件暴露给模型 |
 | 数据存储 | SQLite（WAL、`busy_timeout`、`BEGIN IMMEDIATE`） | 单机单用户、低写入量，零服务运维；原子认领支持并发防重和陈旧租约回收 | PostgreSQL：需要单独服务，当前数据规模和部署不需要 |
 | 简报归档 | `data/briefings/YYYY-MM-DD.md` + `.html`；SQLite 只存状态、索引和精简 trace | Markdown 易检索和审阅，HTML 可直接用于网页/邮件；避免数据库正文与文件工具两套内容 | 只存数据库：文件工具无法直接检索；单独文章库：跨日去重不在 MVP 范围 |
 | HTML 安全 | `markdown-it-py`（禁原始 HTML）+ `nh3` allowlist | 将模型生成的 Markdown 安全渲染为网页和邮件 HTML | 自行用正则写 sanitizer：难以完整处理不可信 HTML |
@@ -161,7 +161,7 @@ def run_agent(client, *, system_prompt: str, user_prompt: str,
               loop_window: int) -> AgentResult
 ```
 
-工具：`list_dir`、`read_file`、`search_content`、`write_file`、`bash`、`fetch_rss`、`search_web`、`fetch_url`、`finish`。`bash` 必须维持现有命令白名单、禁止 shell 拼接/管道/重定向，并限制工作目录；文件工具必须做路径包含校验。LLM 与 SMTP key 缺失时，在真正调用对应服务时返回可读错误，不影响其余模块的单测。
+工具：`list_dir`、`read_file`、`search_content`、`write_file`、`bash`、`fetch_rss`、`search_web`、`fetch_url`、`finish`。`bash` 使用真实 Bash 子进程执行只读命令白名单；禁止 shell 拼接/管道/重定向/命令替换，文件参数解析后必须位于 `data/`，并限制超时和输出。文件工具必须做路径包含校验。LLM 与 SMTP key 缺失时，在真正调用对应服务时返回可读错误，不影响其余模块的单测。
 
 循环规则：
 
