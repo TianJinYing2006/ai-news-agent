@@ -5,6 +5,7 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+  workflow_dispatch: {} # 允许手动触发 / 补跑（例如 push 事件偶发漏触发时）
 
 jobs:
   test:
