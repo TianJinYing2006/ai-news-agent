@@ -12,7 +12,7 @@ decides which tools to call and in what order, without a hardcoded pipeline.*
 核心设计点是**工具调用顺序完全由大模型决定**——不是"先抓完 RSS，再筛选，再总结"的固定流水线，
 而是手写 ReAct 循环：模型发起工具调用、看到真实结果、再决定下一步（继续搜、换源、抓正文、还是结束）。
 
-> 状态：本机 MVP 完成，含真实投递验收（2026-10-14）；159 项单测 + Ruff 全绿（CI 同款命令）。
+> 状态：本机 MVP 完成，含真实投递验收（2026-10-14）；163 项单测 + Ruff 全绿（CI 同款命令）。
 
 ## 亮点
 
@@ -91,10 +91,12 @@ src/news_agent/
 ├─ briefing.py   简报校验 / 渲染净化 / 原子归档
 ├─ run_daily.py  编排与 CLI（唯一业务入口）
 └─ demo_seed.py  演示数据（可一键清除）
-tests/           159 项离线单测（假 client / 假 SMTP / MockTransport）
+tests/           163 项离线单测（假 client / 假 SMTP / MockTransport）
 data/            运行产物（gitignore）：briefings/ · workspace/ · logs/ · SQLite
-docs/            实施计划（权威契约）· 技术选型论证
+sql/schema.sql   建表 SQL（与代码内 DDL 由测试保证一致）
+docs/            实施计划（权威契约）· 技术选型论证 · 演示录屏脚本
 start.cmd        一键启动（Windows，双击即用）
+requirements.txt 依赖清单（一键起环境）
 ```
 
 ## 为什么手写循环而不是用框架
@@ -209,6 +211,7 @@ MVP 明确定位单机单用户：只监听 `127.0.0.1`、零登录鉴权。公�
 
 ```bash
 python -m venv .venv && ./.venv/Scripts/python.exe -m pip install -e ".[dev]"
+# 或：pip install -r requirements.txt（依赖清单，一键起环境；单测另加 .[dev]）
 
 # 凭据二选一（系统环境变量优先）：
 #   A) Windows 用户级环境变量（推荐）：setx DEEPSEEK_API_KEY "..." 等
@@ -222,7 +225,8 @@ python -m venv .venv && ./.venv/Scripts/python.exe -m pip install -e ".[dev]"
 需要三个凭据：DeepSeek API key、Tavily key（可选）、QQ 邮箱 SMTP 授权码。
 推荐用 `setx` 写入用户级环境变量（`DEEPSEEK_API_KEY` / `SMTP_USER` / `SMTP_PASS`，
 可选 `TAVILY_API_KEY`）；缺少凭据时运行会给出明确错误，而不是静默降级。
-收件邮箱不在环境变量里——在网页「身份」页填写。
+收件邮箱不在环境变量里——在网页「身份」页填写。数据库为 SQLite，运行时自动建表；
+独立建表脚本见 `sql/schema.sql`。
 
 ## 每日运行与调度
 
@@ -252,7 +256,7 @@ python -m venv .venv && ./.venv/Scripts/python.exe -m pip install -e ".[dev]"
 | 前端三页（身份 / 订阅 / 历史简报） | ✅ |
 | 进程内调度（启动补跑 / 网页可配时间 / 手动触发） | ✅ |
 | 开箱即用（start.cmd 一键启动 / 演示数据 / CI 徽章） | ✅ |
-| 全量单测与静态检查（159 项 / Ruff / GitHub Actions） | ✅ |
+| 全量单测与静态检查（163 项 / Ruff / GitHub Actions） | ✅ |
 | 真实服务联调与首次正式投递 | ✅ 2026-10-14：tool-calling 两轮、SMTP 登录、dry-run（10 条/14 步）、正式投递（10 条/17 步/33 次工具调用，1 次尝试成功） |
 
 ## 文档
@@ -260,3 +264,4 @@ python -m venv .venv && ./.venv/Scripts/python.exe -m pip install -e ".[dev]"
 - `AGENTS.md` —— 协作工作流与硬性约束（一需求一分支一 PR、三道硬闸、安全红线）
 - `docs/implementation-plan.md` —— 实施阶段、接口契约与验收标准（**以这份为准**）
 - `docs/tech-stack-selection.md` —— 选型依据与关键设计论证
+- `docs/demo-script.md` —— 3 分钟演示录屏脚本（分镜 + 口播要点）
