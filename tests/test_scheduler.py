@@ -221,6 +221,33 @@ def test_app_starts_and_stops_scheduler(tmp_path: Path, monkeypatch: pytest.Monk
     assert app.state.scheduler.running is False  # 关闭即停止
 
 
+def test_run_now_modes_pass_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+    monkeypatch.setattr(scheduler_module, "run_daily", lambda **kw: captured.update(kw))
+    deps = _deps(tmp_path)
+    app = create_app(db=deps.db, briefings_dir=deps.briefings_dir, run_deps=deps)
+
+    with TestClient(app) as client:
+        r = client.post("/run-now", data={"mode": "force"}, follow_redirects=False)
+        assert r.status_code == 303
+        assert r.headers["location"] == "/briefings?triggered=force"
+        job = app.state.scheduler.get_job(MANUAL_JOB_ID)
+        assert job is not None
+        job.func()
+        assert captured.get("force") is True
+        assert captured.get("deps") is deps
+
+        captured.clear()
+        r = client.post("/run-now", data={"mode": "resend"}, follow_redirects=False)
+        assert r.headers["location"] == "/briefings?triggered=resend"
+        app.state.scheduler.get_job(MANUAL_JOB_ID).func()
+        assert captured.get("resend") is True
+
+        captured.clear()
+        r = client.post("/run-now", data={"mode": "bogus"}, follow_redirects=False)
+        assert r.headers["location"] == "/briefings?triggered=normal"
+
+
 def test_app_scheduler_disabled(tmp_path: Path) -> None:
     deps = _deps(tmp_path)
     app = create_app(db=deps.db, briefings_dir=deps.briefings_dir, enable_scheduler=False)
@@ -238,7 +265,7 @@ def test_app_run_now_and_schedule_save(tmp_path: Path, monkeypatch: pytest.Monke
     with TestClient(app) as client:
         r = client.post("/run-now", follow_redirects=False)
         assert r.status_code == 303
-        assert r.headers["location"] == "/briefings?triggered=1"
+        assert r.headers["location"] == "/briefings?triggered=normal"
         assert app.state.scheduler.get_job(MANUAL_JOB_ID) is not None
 
         r = client.post("/schedule", data={"daily_at": "09:30"}, follow_redirects=False)

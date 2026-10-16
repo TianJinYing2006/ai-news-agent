@@ -206,6 +206,16 @@ def test_run_now_without_scheduler(web) -> None:
     assert r.status_code == 200 and "未启用" in r.text
 
 
+def test_briefings_page_has_override_buttons(web) -> None:
+    client, _, _ = web
+    r = client.get("/briefings")
+    assert r.status_code == 200
+    assert "强制重跑" in r.text
+    assert "重发邮件" in r.text
+    assert 'name="mode"' in r.text
+    assert "confirm(" in r.text  # 二次确认
+
+
 def test_briefing_row_has_view_button(web) -> None:
     client, db, briefings = web
     _seed_sent(db, briefings, DATE_SENT, MD)

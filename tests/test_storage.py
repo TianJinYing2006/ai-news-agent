@@ -308,6 +308,65 @@ def test_concurrent_claims_only_one_generates(tmp_path: Path) -> None:
         check.close()
 
 
+# ---------- 人工越权（force / resend） ----------
+
+
+def test_force_bypasses_sent_and_regenerates(db: storage.Database) -> None:
+    storage.claim_daily_run(db, DATE)
+    _generate(db)
+    storage.mark_sending(db, DATE)
+    storage.mark_sent(db, DATE)
+    assert storage.claim_daily_run(db, DATE) == storage.CLAIM_SKIPPED
+
+    assert storage.claim_daily_run(db, DATE, force=True) == storage.CLAIM_GENERATE
+    row = _briefing(db)
+    assert row["status"] == "generating"
+    assert row["attempt"] == 2
+    assert row["summary"] is None  # 重生成前清空摘要
+
+
+def test_force_cannot_break_in_flight_run(db: storage.Database) -> None:
+    storage.claim_daily_run(db, DATE)  # 新鲜的 generating
+    assert storage.claim_daily_run(db, DATE, force=True) == storage.CLAIM_ALREADY_RUNNING
+    assert storage.claim_daily_run(db, DATE, resend=True) == storage.CLAIM_ALREADY_RUNNING
+
+
+def test_force_skips_smtp_resend_shortcut(db: storage.Database) -> None:
+    storage.claim_daily_run(db, DATE)
+    _generate(db)
+    storage.mark_sending(db, DATE)
+    storage.mark_failed(db, DATE, storage.FAILURE_STAGE_SMTP, "超时")
+
+    assert storage.claim_daily_run(db, DATE, force=True) == storage.CLAIM_GENERATE
+    assert _briefing(db)["summary"] is None
+
+
+def test_resend_sent_reuses_artifact(db: storage.Database) -> None:
+    storage.claim_daily_run(db, DATE)
+    _generate(db)
+    storage.mark_sending(db, DATE)
+    storage.mark_sent(db, DATE)
+
+    assert storage.claim_daily_run(db, DATE, resend=True) == storage.CLAIM_RETRY_SEND
+    row = _briefing(db)
+    assert row["status"] == "sending"
+    assert row["attempt"] == 2
+    assert row["summary"] == "今日简报"  # 摘要保留
+
+
+def test_resend_without_artifact_is_no_artifact(db: storage.Database) -> None:
+    assert storage.claim_daily_run(db, DATE, resend=True) == storage.CLAIM_NO_ARTIFACT
+    storage.claim_daily_run(db, DATE)  # 新鲜 generating：并发保护优先
+    assert storage.claim_daily_run(db, DATE, resend=True) == storage.CLAIM_ALREADY_RUNNING
+    _backdate(db, storage.STALE_AFTER_MINUTES + 1)  # 过期且无产物 → 无可重发
+    assert storage.claim_daily_run(db, DATE, resend=True) == storage.CLAIM_NO_ARTIFACT
+
+
+def test_force_and_resend_mutually_exclusive(db: storage.Database) -> None:
+    with pytest.raises(ValueError):
+        storage.claim_daily_run(db, DATE, force=True, resend=True)
+
+
 # ---------- 状态转换 ----------
 
 

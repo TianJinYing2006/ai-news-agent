@@ -43,6 +43,7 @@ from .delivery.email import SendResult, send_briefing
 from .storage import (
     CLAIM_ALREADY_RUNNING,
     CLAIM_GENERATE,
+    CLAIM_NO_ARTIFACT,
     CLAIM_RETRY_SEND,
     CLAIM_SKIPPED,
     Database,
@@ -105,9 +106,15 @@ def run_daily(
     date: str | None = None,
     *,
     dry_run: bool = False,
+    force: bool = False,
+    resend: bool = False,
     deps: RunDeps | None = None,
 ) -> RunOutcome:
-    """执行一次每日运行。CLI、定时任务与手动触发共用此入口。"""
+    """执行一次每日运行。CLI、定时任务与手动触发共用此入口。
+
+    `force`（强制重跑）与 `resend`（仅重发）是显式的人工越权入口，
+    只跳过"已发送"防重；**并发保护（约租期内不可越过）依然生效**。
+    """
     deps = deps or RunDeps.default()
     date = date or _today()
     init_db(deps.db)
@@ -115,6 +122,10 @@ def run_daily(
     claimed = {"value": False}
 
     def execute() -> RunOutcome:
+        if force and resend:
+            return RunOutcome("failed", date, None, "force 与 resend 不能同时使用")
+        if dry_run and (force or resend):
+            return RunOutcome("failed", date, None, "dry-run 不与 force/resend 组合使用")
         if dry_run:
             return _dry_run(date, deps)
 
@@ -129,8 +140,8 @@ def run_daily(
                 "failed", date, None, "尚未配置收件身份：请先在网页「身份」页填写姓名与邮箱"
             )
 
-        action = claim_daily_run(deps.db, date)
-        logger.info("claim=%s date=%s", action, date)
+        action = claim_daily_run(deps.db, date, force=force, resend=resend)
+        logger.info("claim=%s date=%s force=%s resend=%s", action, date, force, resend)
         claimed["value"] = action in (CLAIM_GENERATE, CLAIM_RETRY_SEND)
 
         if action == CLAIM_SKIPPED:
@@ -139,6 +150,13 @@ def run_daily(
             )
         if action == CLAIM_ALREADY_RUNNING:
             return RunOutcome("already_running", date, None, "租约内已有运行在跑，跳过本次触发")
+        if action == CLAIM_NO_ARTIFACT:
+            return RunOutcome(
+                "skipped",
+                date,
+                None,
+                "当天没有可重发的归档简报（尚未生成或产物缺失）；如需生成请用普通运行或强制重跑",
+            )
         if action == CLAIM_RETRY_SEND:
             return _send_existing(date, deps, profile)
         return _generate_then_send(date, deps, profile, cfg)
@@ -374,10 +392,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--dry-run", action="store_true", help="独立工作区跑通链路：不发信、不改正式状态"
     )
+    override = parser.add_mutually_exclusive_group()
+    override.add_argument(
+        "--force",
+        action="store_true",
+        help="强制重跑：忽略当天已发送状态，重新生成并再发一封（覆盖当天归档）",
+    )
+    override.add_argument(
+        "--resend",
+        action="store_true",
+        help="仅重发：不调模型，把当天已归档的简报再发一封邮件",
+    )
     args = parser.parse_args(argv)
 
     setup_file_logging()
-    outcome = run_daily(args.date, dry_run=args.dry_run)
+    outcome = run_daily(args.date, dry_run=args.dry_run, force=args.force, resend=args.resend)
     line = f"[{outcome.status}] {outcome.date}：{outcome.message}"
     print(line)
     logger.info(line)

@@ -56,9 +56,9 @@ def cron_trigger(at: str, timezone: str = TIMEZONE) -> CronTrigger:
     return CronTrigger(hour=hour, minute=minute, timezone=timezone)
 
 
-def _make_job(deps: RunDeps) -> Callable[[], None]:
+def _make_job(deps: RunDeps, **run_kwargs: object) -> Callable[[], None]:
     def job() -> None:
-        run_daily(deps=deps)
+        run_daily(deps=deps, **run_kwargs)
 
     return job
 
@@ -113,10 +113,25 @@ def schedule_catch_up(
     return True
 
 
-def schedule_manual_run(scheduler: BackgroundScheduler, deps: RunDeps) -> None:
-    """网页「立即运行一次」：一次性任务排队，不阻塞请求线程。"""
+def schedule_manual_run(
+    scheduler: BackgroundScheduler,
+    deps: RunDeps,
+    *,
+    mode: str = "normal",
+) -> None:
+    """网页手动触发：一次性任务排队，不阻塞请求线程。
+
+    `mode`：`normal`（普通防重）/ `force`（强制重跑）/ `resend`（仅重发）；
+    非法值按 `normal` 处理，越权语义只在 storage 的原子认领里生效。
+    """
+    kwargs: dict[str, object] = {}
+    if mode == "force":
+        kwargs["force"] = True
+    elif mode == "resend":
+        kwargs["resend"] = True
+
     scheduler.add_job(
-        _make_job(deps),
+        _make_job(deps, **kwargs),
         trigger="date",
         run_date=datetime.now(ZoneInfo(TIMEZONE)) + timedelta(seconds=2),
         id=MANUAL_JOB_ID,
