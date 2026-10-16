@@ -103,7 +103,8 @@ def get_briefing(db: Database, date: str) -> dict | None
 def list_briefings(db: Database, limit: int = 30) -> list[dict]
 def get_setting(db: Database, key: str) -> str | None
 def set_setting(db: Database, key: str, value: str) -> None
-def claim_daily_run(db: Database, date: str, stale_after_minutes: int = 120) -> str
+def claim_daily_run(db: Database, date: str, stale_after_minutes: int = 120,
+                    *, force: bool = False, resend: bool = False) -> str
 def mark_generated(db: Database, date: str, *, md_path: str, html_path: str,
                    summary: str, item_count: int) -> None
 def mark_sending(db: Database, date: str) -> None
@@ -135,7 +136,7 @@ def insert_run(db: Database, date: str, started_at: str, ended_at: str,
 2. `generating`、`generated` 或 `sending` 且 `started_at` 未超过 120 分钟，返回 `already_running`。
 3. 不存在、模型阶段失败、SMTP 失败但产物缺失/不合格，或已过期的 `generating`，原子地写为 `generating` 并增加 `attempt`，返回 `generate`。
 4. `generated`/`sending` 过期，或 `failure_stage=smtp` 时，若简报文件仍通过校验则原子地写为 `sending` 并增加 `attempt`，返回 `retry_send`；pipeline 复用已有文件，不再次调用 LLM。文件不合格则走 `generate` 分支。
-5. `force` 不属于 MVP 接口。网页「立即运行一次」不等同 `force`：它走普通 `run_daily`，`sent` 状态依然会被原子认领跳过，不会重复发送；需要重发时先提供明确的人工操作语义，避免误发。
+5. **人工越权是受控例外**：网页提供「强制重跑」（重新生成 + 覆盖当天归档 + 再发）与「重发邮件」（仅复用已归档产物），CLI 对应 `--force` / `--resend`，网页入口带二次确认。越权只跳过"已发送"防重：**租约内运行中一律返回 `already_running`，不可并发越过**；`resend` 无归档产物时返回 `no_artifact`。普通触发路径（定时、启动补跑、网页「立即运行一次」）仍严格防重。
 
 状态转换：`generating → generated → sending → sent`；任一失败写为 `failed` 并保存阶段与错误。重试失败运行时复用当天记录并增加 attempt，不插入违反唯一约束的新简报。claim 对既有产物的检查是轻量级的：路径位于 `data/briefings/` 内、文件存在且非空；标题、链接、条数等完整内容校验仍由 pipeline 在发送前执行。SMTP 已接受邮件但客户端未收到成功响应时可能产生重复投递；SMTP 不提供端到端 exactly-once 保证，状态记录只能减少重复，不能消除此边界。
 
@@ -192,6 +193,7 @@ class RunOutcome:
     message: str
 
 def run_daily(date: str | None = None, *, dry_run: bool = False,
+              force: bool = False, resend: bool = False,
               deps: RunDeps | None = None) -> RunOutcome
 ```
 
@@ -199,7 +201,7 @@ def run_daily(date: str | None = None, *, dry_run: bool = False,
 
 `run_daily` 是 CLI、定时任务和任何手动触发入口共用的唯一入口。未显式传入日期时按 `Asia/Shanghai` 取当天。流程为：检查必要配置和 profile/subscription → 原子 claim → 若返回 `generate` 则调 Agent、校验并保存；若返回 `retry_send` 则重校验现有文件 → 标记 `sending` → SMTP 发送 → 更新状态并保存 trace。异常路径必须 `mark_failed`，不能留下永久占用的运行状态。
 
-邮件使用 SMTP SSL/STARTTLS 配置；身份页填写的邮箱是收件人，SMTP 用户/授权码是发件通道凭据，不混为一个字段。发送能力不暴露成 Agent 工具。重试次数和间隔配置化；SMTP 未配置时标记 `failed`，网页仍可查看已生成简报。Web 页面只做三项：身份设置、订阅设置、历史简报列表/详情（历史页含推送时间设置、「立即运行一次」与每行「查看」入口）。运行状态可在历史列表展示；不实现单独 trace 页面、分页 API、WebSocket 或公网鉴权体系。
+邮件使用 SMTP SSL/STARTTLS 配置；身份页填写的邮箱是收件人，SMTP 用户/授权码是发件通道凭据，不混为一个字段。发送能力不暴露成 Agent 工具。重试次数和间隔配置化；SMTP 未配置时标记 `failed`，网页仍可查看已生成简报。Web 页面只做三项：身份设置、订阅设置、历史简报列表/详情（历史页含推送时间设置、「立即运行一次」、「强制重跑 / 重发邮件」（带二次确认）与每行「查看」入口）。运行状态可在历史列表展示；不实现单独 trace 页面、分页 API、WebSocket 或公网鉴权体系。
 
 ## 4. 三天冲刺安排
 

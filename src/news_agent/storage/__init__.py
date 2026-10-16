@@ -3,6 +3,7 @@
 from .db import (
     CLAIM_ALREADY_RUNNING,
     CLAIM_GENERATE,
+    CLAIM_NO_ARTIFACT,
     CLAIM_RETRY_SEND,
     CLAIM_SKIPPED,
     DEFAULT_MAX_ITEMS,
@@ -30,6 +31,7 @@ from .db import (
 __all__ = [
     "CLAIM_ALREADY_RUNNING",
     "CLAIM_GENERATE",
+    "CLAIM_NO_ARTIFACT",
     "CLAIM_RETRY_SEND",
     "CLAIM_SKIPPED",
     "DEFAULT_MAX_ITEMS",
