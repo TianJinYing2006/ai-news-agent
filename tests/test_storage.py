@@ -367,6 +367,17 @@ def test_force_and_resend_mutually_exclusive(db: storage.Database) -> None:
         storage.claim_daily_run(db, DATE, force=True, resend=True)
 
 
+def test_regenerate_refreshes_lease(db: storage.Database) -> None:
+    """修复回归：重生成必须刷新 started_at，否则新一轮一开始就"看起来过期"、并发保护失效。"""
+    storage.claim_daily_run(db, DATE)
+    storage.mark_failed(db, DATE, "model", "boom")
+    _backdate(db, storage.STALE_AFTER_MINUTES + 1)  # 让旧租约过期
+
+    assert storage.claim_daily_run(db, DATE) == storage.CLAIM_GENERATE
+    # 刷新后处于租约内：第二次认领必须被并发保护拦下
+    assert storage.claim_daily_run(db, DATE) == storage.CLAIM_ALREADY_RUNNING
+
+
 # ---------- 状态转换 ----------
 
 

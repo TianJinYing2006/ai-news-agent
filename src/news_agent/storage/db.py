@@ -384,12 +384,14 @@ def claim_daily_run(
             )
             return CLAIM_RETRY_SEND
 
-        # 过期 generating、模型阶段失败、产物缺失、force 显式要求 —— 完整重生成
+        # 过期 generating、模型阶段失败、产物缺失、force 显式要求 —— 完整重生成。
+        # 注意必须刷新 started_at：租约从本轮开始算，否则新运行一开始就"看起来过期"，
+        # 并发保护会失效（曾经的 bug，见 tests/test_storage.py 的租约刷新用例）。
         db.execute(
             "UPDATE briefings SET status = 'generating', attempt = attempt + 1,"
-            " summary = NULL, item_count = NULL, failure_stage = NULL, error = NULL,"
-            " updated_at = ? WHERE date = ?",
-            (now_iso, date),
+            " started_at = ?, summary = NULL, item_count = NULL, failure_stage = NULL,"
+            " error = NULL, updated_at = ? WHERE date = ?",
+            (now_iso, now_iso, date),
         )
         return CLAIM_GENERATE
 
