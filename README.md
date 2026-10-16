@@ -28,7 +28,7 @@ decides which tools to call and in what order, without a hardcoded pipeline.*
 
 ## 60 秒本地体验（Windows）
 
-1. 双击 **`start.cmd`** —— 自动创建虚拟环境、安装依赖、启动服务并打开浏览器（首次约 1–3 分钟）；
+1. 双击 **`start.cmd`** —— 自动创建虚拟环境、安装依赖（优先国内镜像、失败自动回退）、启动服务并打开浏览器（首次约 1–2 分钟）；
 2. **没有 API key 也能逛**：另开一个终端执行
    `.venv\Scripts\python.exe -m news_agent.demo_seed`
    —— 历史页会出现两天带「演示数据」标记的简报（`--clean` 可清除）；
@@ -198,6 +198,19 @@ SMTP 失败后的重跑只重发邮件、不重跑模型。唯一理论边界是
 演示数据用 `python -m news_agent.demo_seed --clean` 单独清除；删掉 `data/` 即整体重置（不影响环境变量里的凭据）。
 </details>
 
+<details><summary>依赖安装很慢 / 卡住怎么办？</summary>
+
+国内网络直连 PyPI 可能非常慢（本机实测 >10 分钟仍未完成）。用清华镜像：
+`pip install -e ".[dev]" -i https://pypi.tuna.tsinghua.edu.cn/simple`。
+`start.cmd` 已内置该策略：优先镜像、失败自动回退直连。
+</details>
+
+<details><summary>启动时提示端口 8000 被占用？</summary>
+
+查占用进程：`netstat -ano | findstr :8000`，再 `taskkill /PID <pid> /F`；
+或先关掉已在运行的 `python -m news_agent.web`（本机同时只需一个实例）。
+</details>
+
 <details><summary>为什么没有 Docker / 公网部署？</summary>
 
 MVP 明确定位单机单用户：只监听 `127.0.0.1`、零登录鉴权。公网部署需要认证、隔离与配额，
@@ -207,25 +220,32 @@ MVP 明确定位单机单用户：只监听 `127.0.0.1`、零登录鉴权。公�
 
 ## 快速开始（开发者）
 
-不想配环境？直接双击 **`start.cmd`**（见上「60 秒本地体验」）。手动方式：
+**前提**：Python 3.11+（开发基准 3.13）；Windows 上 `bash` 工具依赖 Git for Windows（用其内置 Git Bash）。
 
-```bash
-python -m venv .venv && ./.venv/Scripts/python.exe -m pip install -e ".[dev]"
-# 或：pip install -r requirements.txt（依赖清单，一键起环境；单测另加 .[dev]）
+不想配环境？直接双击 **`start.cmd`**——自动建环境、装依赖（优先清华镜像、失败自动回退直连）、启动并打开浏览器。手动方式：
 
-# 凭据二选一（系统环境变量优先）：
-#   A) Windows 用户级环境变量（推荐）：setx DEEPSEEK_API_KEY "..." 等
-#   B) 项目 .env 兜底（已 gitignore）：cp .env.example .env 后填入
-
-./.venv/Scripts/python.exe -m pytest -q                        # 单测（离线 mock，不联网）
-./.venv/Scripts/python.exe -m news_agent.run_daily --dry-run   # 真链路演练：不发信、不改状态
-./.venv/Scripts/python.exe -m news_agent.web                   # 网页 + 每日调度（仅本机）：http://127.0.0.1:8000
+```powershell
+# Windows（PowerShell）
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"        # 国内网络可加 -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 也可：pip install -r requirements.txt（依赖清单一键起环境；单测需另加 .[dev]）
+.\.venv\Scripts\python.exe -m pytest -q                      # 单测（离线 mock，不联网）
+.\.venv\Scripts\python.exe -m news_agent.run_daily --dry-run # 真链路演练：不发信、不改状态
+.\.venv\Scripts\python.exe -m news_agent.web                 # 网页 + 每日调度：http://127.0.0.1:8000
 ```
 
-需要三个凭据：DeepSeek API key、Tavily key（可选）、QQ 邮箱 SMTP 授权码。
-推荐用 `setx` 写入用户级环境变量（`DEEPSEEK_API_KEY` / `SMTP_USER` / `SMTP_PASS`，
-可选 `TAVILY_API_KEY`）；缺少凭据时运行会给出明确错误，而不是静默降级。
-收件邮箱不在环境变量里——在网页「身份」页填写。数据库为 SQLite，运行时自动建表；
+```bash
+# macOS / Linux（等效）
+python3 -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/python -m pytest -q
+.venv/bin/python -m news_agent.web
+```
+
+三个凭据（都不阻塞单测）：DeepSeek API key、Tavily key（可选）、QQ 邮箱 SMTP 授权码。
+Windows 用户级环境变量（推荐）：`setx DEEPSEEK_API_KEY "..."`（`SMTP_USER` / `SMTP_PASS` 同理）；
+或项目 `.env` 兜底（已 gitignore）：`cp .env.example .env` 后填入。缺少凭据时运行会给出明确错误，
+而不是静默降级。收件邮箱不在环境变量里——在网页「身份」页填写。数据库为 SQLite，运行时自动建表，
 独立建表脚本见 `sql/schema.sql`。
 
 ## 每日运行与调度

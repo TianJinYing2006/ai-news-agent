@@ -54,10 +54,14 @@ $importOk = ($LASTEXITCODE -eq 0)
 $ErrorActionPreference = $previous
 
 if (-not $importOk) {
-    Write-Host "[2/3] 安装依赖（首次约 1-3 分钟）..."
-    & $python -m pip install -e .
+    Write-Host "[2/3] 安装依赖（首次约 1-2 分钟；优先清华镜像，失败自动回退直连）..."
+    & $python -m pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple --timeout 30 --retries 2
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "依赖安装失败：请检查网络后重试（可先用 .venv\Scripts\python.exe -m pip install -e . 手动排查）。" -ForegroundColor Red
+        Write-Host "镜像安装失败，改用直连 PyPI 重试..." -ForegroundColor Yellow
+        & $python -m pip install -e . --timeout 20 --retries 1
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "依赖安装失败：请检查网络后重试（可手动执行：.venv\Scripts\python.exe -m pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple）。" -ForegroundColor Red
         Read-Host "按回车退出"
         exit 1
     }
