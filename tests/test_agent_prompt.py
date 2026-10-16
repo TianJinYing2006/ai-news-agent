@@ -64,6 +64,11 @@ def test_prompt_does_not_prescribe_tool_order() -> None:
         assert forbidden not in user, f"user prompt 写死了流程：{forbidden}"
 
 
+def test_prompt_includes_cost_awareness() -> None:
+    system, _ = _prompts()
+    assert "避免对同一链接或同一批源重复抓取" in system
+
+
 def test_user_prompt_only_states_goal() -> None:
     _, user = _prompts()
     assert "finish" in user

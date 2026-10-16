@@ -65,7 +65,7 @@ class Config:
                 model=os.getenv("DEEPSEEK_MODEL", "deepseek-flash"),
                 thinking_enabled=os.getenv("DEEPSEEK_THINKING", "1") != "0",
                 max_steps=int(os.getenv("MAX_STEPS", "30")),
-                token_budget=int(os.getenv("TOKEN_BUDGET", "800000")),
+                token_budget=int(os.getenv("TOKEN_BUDGET", "1200000")),
                 loop_window=int(os.getenv("LOOP_WINDOW", "3")),
             ),
             tavily_api_key=os.getenv("TAVILY_API_KEY", ""),
