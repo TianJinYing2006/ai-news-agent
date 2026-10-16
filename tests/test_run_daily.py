@@ -350,6 +350,76 @@ def test_smtp_retry_reuses_artifact_without_agent(tmp_path: Path) -> None:
     assert row is not None and row["status"] == "sent"
 
 
+# ---------- 人工越权（force / resend） ----------
+
+
+def test_force_rerun_regenerates_and_resends(tmp_path: Path) -> None:
+    sender = FakeSender([SendResult(ok=True, attempts=1), SendResult(ok=True, attempts=1)])
+    client = _client_writing(tmp_path / "workspace" / DATE / "briefing.md", VALID_MD)
+    deps = _deps(tmp_path, client=client, sender=sender)
+    _seed_profile(deps)
+
+    assert run_daily(DATE, deps=deps).status == "sent"
+    second = run_daily(DATE, force=True, deps=deps)
+
+    assert second.status == "sent"
+    assert len(client.requests) == 2  # 确实重新调了模型
+    assert len(sender.calls) == 2  # 再次发信
+    row = get_briefing(deps.db, DATE)
+    assert row is not None and row["attempt"] == 2 and row["status"] == "sent"
+    runs = deps.db.fetchall("SELECT * FROM agent_runs")
+    assert len(runs) == 2
+
+
+def test_resend_reuses_artifact_without_model(tmp_path: Path) -> None:
+    sender = FakeSender([SendResult(ok=True, attempts=1), SendResult(ok=True, attempts=1)])
+    client = _client_writing(tmp_path / "workspace" / DATE / "briefing.md", VALID_MD)
+    deps = _deps(tmp_path, client=client, sender=sender)
+    _seed_profile(deps)
+
+    assert run_daily(DATE, deps=deps).status == "sent"
+    second = run_daily(DATE, resend=True, deps=deps)
+
+    assert second.status == "sent"
+    assert len(client.requests) == 1  # 不调模型
+    assert len(sender.calls) == 2
+    row = get_briefing(deps.db, DATE)
+    assert row is not None and row["attempt"] == 2
+
+
+def test_resend_without_artifact_is_skipped(tmp_path: Path) -> None:
+    deps = _deps(tmp_path)
+    _seed_profile(deps)
+
+    outcome = run_daily(DATE, resend=True, deps=deps)
+
+    assert outcome.status == "skipped"
+    assert "重发" in outcome.message
+    assert deps.sender.calls == []
+
+
+def test_force_resend_conflict_and_dry_run_rejected(tmp_path: Path) -> None:
+    deps = _deps(tmp_path)
+    _seed_profile(deps)
+
+    conflict = run_daily(DATE, force=True, resend=True, deps=deps)
+    assert conflict.status == "failed" and "不能同时" in conflict.message
+
+    dry = run_daily(DATE, dry_run=True, force=True, deps=deps)
+    assert dry.status == "failed" and "dry-run" in dry.message
+
+
+def test_force_cannot_break_in_flight(tmp_path: Path) -> None:
+    deps = _deps(tmp_path)
+    _seed_profile(deps)
+    claim_daily_run(deps.db, DATE)  # 新鲜 generating
+
+    outcome = run_daily(DATE, force=True, deps=deps)
+
+    assert outcome.status == "already_running"
+    assert deps.sender.calls == []
+
+
 # ---------- dry-run ----------
 
 
@@ -384,23 +454,40 @@ def test_main_exit_codes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(module, "setup_file_logging", lambda: None)
 
     monkeypatch.setattr(
-        module, "run_daily", lambda date=None, dry_run=False: RunOutcome("sent", DATE, None, "ok")
+        module,
+        "run_daily",
+        lambda date=None, dry_run=False, force=False, resend=False: RunOutcome(
+            "sent", DATE, None, "ok"
+        ),
     )
     assert module.main(["--date", DATE]) == 0
 
     monkeypatch.setattr(
         module,
         "run_daily",
-        lambda date=None, dry_run=False: RunOutcome("failed", DATE, None, "boom"),
+        lambda date=None, dry_run=False, force=False, resend=False: RunOutcome(
+            "failed", DATE, None, "boom"
+        ),
     )
     assert module.main(["--date", DATE]) == 1
 
     captured: dict[str, Any] = {}
 
-    def fake(date: str | None = None, dry_run: bool = False) -> RunOutcome:
-        captured["dry_run"] = dry_run
+    def fake(
+        date: str | None = None,
+        dry_run: bool = False,
+        force: bool = False,
+        resend: bool = False,
+    ) -> RunOutcome:
+        captured.update({"dry_run": dry_run, "force": force, "resend": resend})
         return RunOutcome("dry_run", DATE, None, "ok")
 
     monkeypatch.setattr(module, "run_daily", fake)
     assert module.main(["--dry-run"]) == 0
     assert captured["dry_run"] is True
+
+    assert module.main(["--force"]) == 0
+    assert captured["force"] is True and captured["resend"] is False
+
+    assert module.main(["--resend"]) == 0
+    assert captured["resend"] is True and captured["force"] is False

@@ -47,6 +47,12 @@ from .scheduler import (
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
+_TRIGGER_MESSAGES = {
+    "normal": "已触发，正在后台生成；稍后刷新本页查看状态。",
+    "force": "已触发「强制重跑」：将重新生成简报并再次发送邮件（约 1–3 分钟），完成后刷新查看。",
+    "resend": "已触发「重发邮件」：仅当存在已归档简报时执行，稍后刷新查看。",
+}
+
 
 def create_app(
     *,
@@ -158,7 +164,7 @@ def create_app(
         request: Request,
         *,
         saved: int = 0,
-        triggered: int = 0,
+        triggered: str = "",
         error: str | None = None,
     ) -> HTMLResponse:
         return templates.TemplateResponse(
@@ -168,13 +174,13 @@ def create_app(
                 "briefings": list_briefings(database),
                 "daily_at": _effective_at(),
                 "saved": saved,
-                "triggered": triggered,
+                "triggered_message": _TRIGGER_MESSAGES.get(triggered, "") if triggered else "",
                 "error": error,
             },
         )
 
     @app.get("/briefings", response_class=HTMLResponse)
-    def briefings_page(request: Request, saved: int = 0, triggered: int = 0) -> HTMLResponse:
+    def briefings_page(request: Request, saved: int = 0, triggered: str = "") -> HTMLResponse:
         return _render_briefings(request, saved=saved, triggered=triggered)
 
     @app.post("/schedule", response_class=HTMLResponse)
@@ -189,11 +195,13 @@ def create_app(
         return RedirectResponse("/briefings?saved=1", status_code=303)
 
     @app.post("/run-now", response_class=HTMLResponse)
-    def run_now(request: Request) -> HTMLResponse:
+    def run_now(request: Request, mode: str = Form("normal")) -> HTMLResponse:
         if scheduler is None or deps is None:
             return _render_briefings(request, error="调度器未启用，无法从网页触发运行")
-        schedule_manual_run(scheduler, deps)
-        return RedirectResponse("/briefings?triggered=1", status_code=303)
+        if mode not in _TRIGGER_MESSAGES:
+            mode = "normal"
+        schedule_manual_run(scheduler, deps, mode=mode)
+        return RedirectResponse(f"/briefings?triggered={mode}", status_code=303)
 
     @app.get("/briefings/{date}", response_class=HTMLResponse)
     def briefing_detail(request: Request, date: str) -> HTMLResponse:

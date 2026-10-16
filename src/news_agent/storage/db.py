@@ -45,6 +45,7 @@ CLAIM_SKIPPED = "skipped"
 CLAIM_ALREADY_RUNNING = "already_running"
 CLAIM_GENERATE = "generate"
 CLAIM_RETRY_SEND = "retry_send"
+CLAIM_NO_ARTIFACT = "no_artifact"
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -308,14 +309,24 @@ def claim_daily_run(
     db: Database,
     date: str,
     stale_after_minutes: int = STALE_AFTER_MINUTES,
+    *,
+    force: bool = False,
+    resend: bool = False,
 ) -> str:
     """原子认领当天运行，返回下一步动作（见 §3.2）：
 
-    - `skipped`：已发送，不再重复发送；
-    - `already_running`：租约内已有运行在跑（generating/generated/sending）；
+    - `skipped`：已发送且未要求强制，不再重复发送；
+    - `already_running`：租约内已有运行在跑——**任何模式都不能并发越过**；
     - `retry_send`：产物可用，只需重发邮件，**不重跑 LLM**；
-    - `generate`：需要完整生成（首次、模型阶段失败、产物缺失或租约过期）。
+    - `generate`：需要完整生成（首次、模型阶段失败、产物缺失、租约过期或 `force`）；
+    - `no_artifact`：`resend=True` 但当天没有可用归档产物，无可重发。
+
+    `force=True` 是显式人工越权：忽略 `sent` 与"SMTP 失败只重发"的捷径，完整重跑；
+    `resend=True` 是显式重发：不调模型，仅复用已归档产物。两者互斥。
     """
+    if force and resend:
+        raise ValueError("force 与 resend 不能同时使用")
+
     _validate_date(date)
     now = _now()
     now_iso = _iso(now)
@@ -325,6 +336,8 @@ def claim_daily_run(
         row = db.fetchone("SELECT * FROM briefings WHERE date = ?", (date,))
 
         if row is None:
+            if resend:
+                return CLAIM_NO_ARTIFACT
             db.execute(
                 "INSERT INTO briefings(date, status, md_path, html_path, attempt, started_at,"
                 " updated_at) VALUES(?, 'generating', ?, ?, 1, ?, ?)",
@@ -333,19 +346,36 @@ def claim_daily_run(
             return CLAIM_GENERATE
 
         status = row["status"]
-        if status == "sent":
-            return CLAIM_SKIPPED
-
         stale = _is_stale(row["started_at"], now, stale_after_minutes)
 
+        # 并发红线：租约内的 generating/generated/sending 不可被任何模式越过
         if status in ("generating", "generated", "sending") and not stale:
             return CLAIM_ALREADY_RUNNING
 
-        in_flight_stale = status in ("generated", "sending") and stale
-        smtp_failed = status == "failed" and row["failure_stage"] == FAILURE_STAGE_SMTP
+        # 显式重发：不调模型，仅复用已归档产物
+        if resend:
+            if _artifacts_usable(db.briefings_dir, row["md_path"], row["html_path"]):
+                db.execute(
+                    "UPDATE briefings SET status = 'sending', attempt = attempt + 1,"
+                    " started_at = ?, failure_stage = NULL, error = NULL, updated_at = ?"
+                    " WHERE date = ?",
+                    (now_iso, now_iso, date),
+                )
+                return CLAIM_RETRY_SEND
+            return CLAIM_NO_ARTIFACT
+
+        if status == "sent" and not force:
+            return CLAIM_SKIPPED
+
+        # 普通（非 force）的自动捷径：过期在飞或 SMTP 失败 → 只重发、不重跑模型
         if (
-            in_flight_stale or smtp_failed
-        ) and _artifacts_usable(db.briefings_dir, row["md_path"], row["html_path"]):
+            not force
+            and (
+                (status in ("generated", "sending") and stale)
+                or (status == "failed" and row["failure_stage"] == FAILURE_STAGE_SMTP)
+            )
+            and _artifacts_usable(db.briefings_dir, row["md_path"], row["html_path"])
+        ):
             db.execute(
                 "UPDATE briefings SET status = 'sending', attempt = attempt + 1,"
                 " started_at = ?, failure_stage = NULL, error = NULL, updated_at = ?"
@@ -354,8 +384,7 @@ def claim_daily_run(
             )
             return CLAIM_RETRY_SEND
 
-        # 首次由上面处理；这里是：过期的 generating、模型阶段失败、
-        # SMTP 失败但产物缺失/不合格 —— 一律完整重生成。
+        # 过期 generating、模型阶段失败、产物缺失、force 显式要求 —— 完整重生成
         db.execute(
             "UPDATE briefings SET status = 'generating', attempt = attempt + 1,"
             " summary = NULL, item_count = NULL, failure_stage = NULL, error = NULL,"
